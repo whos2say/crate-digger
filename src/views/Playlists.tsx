@@ -4,6 +4,7 @@ import { api, ApiError, type Playlist, type PlaylistTrack } from "../api";
 import { useShell } from "../App";
 import { useReorder } from "../lib/dnd";
 import { ListCards } from "./TopTens";
+import { Art } from "../components/CoverGrid";
 
 export function Playlists() {
   const [lists, setLists] = useState<Playlist[] | null>(null);
@@ -124,7 +125,7 @@ export function PlaylistEditor() {
         {list.tracks.map((t, i) => (
           <li key={`${t.record.id}:${t.track.position}:${i}`} data-slot={i} className={classFor(i)}>
             <span className="n">{i + 1}</span>
-            <button className="art" onClick={() => open(t.record, list.tracks.map((x) => x.record))} aria-label={t.record.title}><img src={t.record.thumb} alt="" /></button>
+            <button className="art" onClick={() => open(t.record, list.tracks.map((x) => x.record))} aria-label={t.record.title}><Art src={t.record.thumb} alt="" /></button>
             <div className="t">
               <strong>{t.track.title}</strong>
               <span>{t.record.artist} — {t.record.title}{t.record.year ? `, ${t.record.year}` : ""}{t.track.duration ? ` · ${t.track.duration}` : ""} · via {t.record.source === "discogs" ? "Discogs" : "Spotify"}{t.track.spotifyUri && <> · <a href={t.track.spotifyUrl} target="_blank" rel="noopener" style={{ color: "#1db954" }}>on Spotify</a></>}</span>

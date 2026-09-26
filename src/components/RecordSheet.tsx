@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, getOwnerKey, getPalette, loadPalette, paletteDistance, type Record, type RecordDetail, type Track } from "../api";
+import { api, getOwnerKey, getPalette, loadPalette, paletteDistance, retryDelayMs, type Record, type RecordDetail, type Track } from "../api";
 import { useShell } from "../App";
 import { pausePlayer, playUri } from "../lib/spotify";
+import { Art } from "./CoverGrid";
 
 type Playing =
   | { lane: "youtube"; id: string; title: string }
@@ -21,12 +22,20 @@ export default function RecordSheet({ record }: { record: Record }) {
   // Full tracks need the connected account to be Premium and this browser to hold the owner key.
   const premium = spotifyOn && status?.spotify.user?.product === "premium" && (!!getOwnerKey() || !status?.ownerKeySet);
 
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    setDetail(null); setError(null); setPlaying(null); setSimilar(null);
+    if (attempt === 0) { setDetail(null); setError(null); setPlaying(null); setSimilar(null); }
     let live = true;
-    api.record(record.id).then((d) => live && setDetail(d)).catch((e) => live && setError(e.message));
-    return () => { live = false; pausePlayer(); };
-  }, [record.id]);
+    let timer: number | undefined;
+    api.record(record.id).then((d) => live && setDetail(d)).catch((e) => {
+      if (!live) return;
+      const delay = retryDelayMs(e);
+      if (delay && attempt < 3) { setError(`Busy — reading the sleeve again in ${Math.ceil(delay / 1000)}s…`); timer = window.setTimeout(() => setAttempt((n) => n + 1), delay); }
+      else setError(e.message);
+    });
+    return () => { live = false; if (timer) window.clearTimeout(timer); if (attempt === 0) pausePlayer(); };
+  }, [record.id, attempt]);
+  useEffect(() => { setAttempt(0); }, [record.id]);
 
   // With Spotify connected, look each track up (a few at a time) so the play buttons light up.
   const matchedFor = useRef<string | null>(null);
@@ -96,7 +105,7 @@ export default function RecordSheet({ record }: { record: Record }) {
       <div className="sheet-scrim" onClick={close} />
       <aside className="sheet" aria-label={`${r.artist} – ${r.title}`}>
         <div className="hero">
-          <img src={cover} alt={`${r.artist} – ${r.title} cover`} />
+          <Art src={cover} fallback={record.thumb} alt={`${r.artist} – ${r.title} cover`} />
           <button className="close" onClick={close} aria-label="Close">×</button>
         </div>
         <div className="body">
@@ -131,7 +140,7 @@ export default function RecordSheet({ record }: { record: Record }) {
               <div className="grid dense" style={{ padding: "8px 0 0" }}>
                 {similar.map((s) => (
                   <div key={s.id} className="tile">
-                    <button className="art" onClick={() => open(s, pool)} aria-label={`${s.artist} – ${s.title}`}><img src={s.thumb} alt="" className="loaded" /></button>
+                    <button className="art" onClick={() => open(s, pool)} aria-label={`${s.artist} – ${s.title}`}><Art src={s.thumb} alt="" className="loaded" /></button>
                     <div className="label"><strong>{s.title}</strong><span>{s.artist}</span></div>
                   </div>
                 ))}

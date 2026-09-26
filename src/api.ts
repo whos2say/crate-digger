@@ -67,6 +67,24 @@ export const api = {
   deletePlaylist: (id: string) => call<{ ok: true }>(`/api/playlists/${id}`, { method: "DELETE" }),
 };
 
+// ---------- cover images ----------
+// The worker wraps every cover as /api/image?u=<cdn url> so the edge can cache it and the canvas
+// can read pixels. For plain <img> display that proxy is a worker call per cover, which adds up to
+// a burst the platform rate-limits, so the browser loads covers straight from the Discogs CDN and
+// only falls back to the proxy when the CDN refuses. Palette reads still use the proxy (CORS).
+export function directImage(url: string | undefined): string {
+  if (!url) return "";
+  if (url.startsWith("/api/image?")) {
+    const u = new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("u");
+    if (u && /^https:\/\/(i|img|st)\.discogs\.com\//.test(u)) return u;
+  }
+  return url;
+}
+export function proxiedImage(url: string | undefined): string {
+  if (!url) return "";
+  return url.startsWith("/api/image?") || url.startsWith("/") ? url : `/api/image?u=${encodeURIComponent(url)}`;
+}
+
 // ---------- cover palette (for "similar looking") ----------
 export interface Palette { h: number; s: number; l: number; dark: number }
 const palettes = new Map<string, Palette>();
@@ -101,7 +119,7 @@ export function loadPalette(r: Record): Promise<Palette | null> {
       } catch { resolve(null); }
     };
     img.onerror = () => resolve(null);
-    img.src = r.thumb;
+    img.src = proxiedImage(r.thumb);
   });
   pending.set(r.id, p);
   return p;

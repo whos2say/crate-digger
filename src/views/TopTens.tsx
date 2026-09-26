@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, type Record, type TopTen } from "../api";
 import { useShell } from "../App";
-import { Cover } from "../components/CoverGrid";
+import { Art, Cover } from "../components/CoverGrid";
 import { useReorder } from "../lib/dnd";
 
 export function TopTens() {
@@ -37,7 +37,7 @@ export function ListCards({ lists }: { lists: { id: string; title: string; blurb
     <div className="list-cards">
       {lists.map((l) => (
         <Link key={l.id} to={l.href} className="list-card">
-          <div className="fan">{Array.from({ length: 5 }, (_, i) => (l.covers[i] ? <img key={i} src={l.covers[i]} alt="" loading="lazy" /> : <i key={i} />))}</div>
+          <div className="fan">{Array.from({ length: 5 }, (_, i) => (l.covers[i] ? <Art key={i} src={l.covers[i]} alt="" loading="lazy" /> : <i key={i} />))}</div>
           <div className="text"><h3>{l.title}</h3><p>{l.blurb || l.count}</p></div>
         </Link>
       ))}

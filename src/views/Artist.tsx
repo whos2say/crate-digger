@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, retryDelayMs, type ArtistDetail, type Record, type Track } from "../api";
 import { useShell } from "../App";
-import CoverGrid from "../components/CoverGrid";
+import CoverGrid, { Art } from "../components/CoverGrid";
 
 export default function Artist() {
   const { id } = useParams();
@@ -57,7 +57,7 @@ export default function Artist() {
   return (
     <>
       <div className="artist-head">
-        {artist.image && <img src={artist.image} alt="" />}
+        {artist.image && <Art src={artist.image} alt="" />}
         <div>
           <h1>{artist.name}</h1>
           {artist.profile && <p>{artist.profile}</p>}
