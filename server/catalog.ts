@@ -61,7 +61,7 @@ async function get<T>(db: D1Like | null, env: SpotifyEnv, path: string, freshMs 
       if (hit) return hit.body as T;
       let detail = "";
       try { detail = ((await res.json()) as { error?: { message?: string } }).error?.message ?? ""; } catch { /* no body */ }
-      throw new SpotifyError(`Spotify answered ${res.status}${detail ? `: ${detail}` : "."}`, 502);
+      throw new SpotifyError(`Spotify answered ${res.status}${detail ? `: ${detail}` : "."} [${path.slice(0, 180)}]`, 502);
     }
     const text = await res.text();
     const body = JSON.parse(text);
