@@ -87,7 +87,7 @@ test("status + health", async () => {
 
 test("catalogue: crates and search come from Spotify with an app token; artists ride along on text search", async () => {
   const c = await j(await req("/api/crates"));
-  assert.ok(c.body.crates.find((x) => x.key === "deep-house-90s")); assert.ok(c.body.browse.genres.includes("Deep House"));
+  assert.deepEqual(c.body.crates.slice(0, 3).map((x) => x.key), ["classic-rock", "broadway", "disney"]); assert.ok(c.body.browse.genres.includes("Classic Rock"));
   const crate = await j(await req("/api/crates/deep-house-90s"));
   assert.equal(crate.status, 200);
   assert.equal(crate.body.label, "Deep house, nineties");

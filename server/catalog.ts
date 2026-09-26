@@ -135,6 +135,10 @@ export function artistToCard(a: SpArtist): ArtistCard {
 // ---------- crates ----------
 
 export const CRATES: { key: string; label: string; q: string }[] = [
+  { key: "classic-rock", label: "Classic rock", q: `genre:"classic rock"` },
+  { key: "broadway", label: "Broadway musicals", q: `genre:broadway` },
+  { key: "disney", label: "Disney songs", q: `genre:disney` },
+  { key: "show-tunes", label: "Show tunes", q: `genre:"show tunes"` },
   { key: "deep-house-90s", label: "Deep house, nineties", q: `genre:"deep house" year:1990-1999` },
   { key: "disco", label: "Disco twelves", q: `genre:disco year:1976-1983` },
   { key: "detroit", label: "Detroit", q: `genre:"detroit techno"` },
@@ -146,7 +150,7 @@ export const CRATES: { key: string; label: string; q: string }[] = [
   { key: "afrobeat", label: "Afrobeat", q: `genre:afrobeat` },
   { key: "boogie", label: "Boogie", q: `genre:boogie year:1979-1986` },
 ];
-export const GENRES = ["Deep House", "House", "Techno", "Disco", "Boogie", "Jazz Funk", "Soul", "Funk", "Dub", "Downtempo", "Breakbeat", "UK Garage", "Ambient", "Balearic", "Afrobeat", "Italo Disco", "Electro", "Drum And Bass", "Acid House", "Minimal Techno", "Bossa Nova", "Hip Hop", "Trip Hop", "Neo Soul"];
+export const GENRES = ["Classic Rock", "Broadway", "Show Tunes", "Disney", "Soundtrack", "Rock", "Pop", "Soul", "Funk", "Disco", "Jazz", "Blues", "Country", "Reggae", "Hip Hop", "House", "Deep House", "Techno", "Ambient", "Bossa Nova"];
 export const DECADES = ["1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s"];
 
 export function decadeRange(decade: string): string | undefined {
@@ -189,7 +193,7 @@ function dedupeAlbums(albums: SpAlbum[]): SpAlbum[] {
 const PAGE = 40;
 // Spotify rejects a query that is only a year: or label: filter, so a bare decade (or label)
 // browse fans out across broad genres and merges what comes back.
-const FANOUT_GENRES = ["soul", "funk", "disco", "jazz", "house", "reggae", "hip hop", "electronic", "latin", "rock"];
+const FANOUT_GENRES = ["classic rock", "broadway", "disney", "show tunes", "soul", "funk", "disco", "jazz", "pop", "rock"];
 
 async function fanOut(db: D1Like | null, env: SpotifyEnv, p: SearchParams): Promise<{ records: Record[]; artists: ArtistCard[]; page: number; pages: number }> {
   const results = await Promise.all(FANOUT_GENRES.map(async (g) => {

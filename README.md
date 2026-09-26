@@ -72,8 +72,9 @@ npm test                                            # builds must exist: npm run
   `dg_cache` table (24 h), then Spotify with a client-credentials token that refreshes itself. A
   429 serves stale data when there is any and otherwise returns `Retry-After`, which the views
   turn into an automatic retry with a countdown.
-- Crates are Spotify searches (`genre:"deep house" year:1990-1999`); the genre and decade chips
-  combine. Text search returns artists (with photos) above the albums.
+- Crates are Spotify searches (`genre:"classic rock"`, `genre:broadway`, `genre:disney`,
+  `genre:"deep house" year:1990-1999`, …) defined in `server/catalog.ts`; the genre and decade
+  chips combine. Text search returns artists (with photos) above the albums.
 - Covers load straight from Spotify's CDN in the browser. `/api/image` remains for canvas pixel
   reads ("More covers like this") and as a fallback.
 - An artist page is a wall: portrait, genres, top tracks (play / + top ten / + set), then the

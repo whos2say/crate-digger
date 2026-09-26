@@ -27,7 +27,7 @@ export default function Crate() {
 
   const crateKey = params.get("crate");
   const mode: Mode = params.get("q") ? "search" : (params.get("genre") || params.get("style")) ? "genre" : params.get("decade") ? "decade" : params.get("label") ? "label" : params.get("dig") ? "dig" : "crate";
-  const activeCrate = crateKey ?? crates[0]?.key ?? "deep-house-90s";
+  const activeCrate = crateKey ?? crates[0]?.key ?? "classic-rock";
 
   useEffect(() => { api.crates().then((c) => { setCrates(c.crates); setBrowse(c.browse); }).catch(() => {}); }, []);
 
