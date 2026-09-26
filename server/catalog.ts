@@ -332,3 +332,38 @@ export async function getRecord(db: D1Like | null, env: SpotifyEnv, id: string):
   };
 }
 
+
+// ---------- audio analysis ----------
+
+/** Compact music structure the visualizer consumes. Everything is in milliseconds from track
+ *  start, so the client can compare against the SDK's playback position directly. */
+export interface AudioBeats { beats: number[]; bars: number[]; sections: { start: number; tempo: number; loudness: number }[]; tempo?: number }
+
+/** Fetch Spotify's audio analysis for a track and return just the parts the visualizer needs.
+ *  Returns null if Spotify refuses (403 on client-credentials tokens for apps created after Nov
+ *  2024). The null is cached so we don't ask again for a track we already know is unavailable. */
+export async function audioBeats(db: D1Like | null, env: SpotifyEnv, trackId: string): Promise<AudioBeats | null> {
+  if (!/^[A-Za-z0-9]+$/.test(trackId)) throw new SpotifyError("Unknown track id.", 400);
+  const key = "sp:analysis:" + trackId;
+  const cached = memory.get(key);
+  if (cached) return cached.body as AudioBeats | null;
+  try {
+    const data = await get<{ beats: { start: number }[]; bars: { start: number }[]; sections: { start: number; tempo: number; loudness: number }[]; track: { tempo: number } }>(db, env, `/audio-analysis/${trackId}`, 30 * 24 * 60 * 60 * 1000);
+    const out: AudioBeats = {
+      beats: (data.beats ?? []).map((b) => Math.round(b.start * 1000)),
+      bars: (data.bars ?? []).map((b) => Math.round(b.start * 1000)),
+      sections: (data.sections ?? []).map((s) => ({ start: Math.round(s.start * 1000), tempo: s.tempo, loudness: s.loudness })),
+      tempo: data.track?.tempo,
+    };
+    memory.set(key, { body: out, at: Date.now() });
+    return out;
+  } catch (e) {
+    // A 403 (endpoint removed for this app) or 404 (unknown track) is a permanent "no";
+    // cache the null so the client isn't asked again for this track this session.
+    if (e instanceof SpotifyError && (e.status === 502 || e.status === 404)) {
+      memory.set(key, { body: null, at: Date.now() });
+      return null;
+    }
+    throw e;
+  }
+}

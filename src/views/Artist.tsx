@@ -3,15 +3,19 @@ import { useParams } from "react-router-dom";
 import { api, retryDelayMs, type ArtistDetail } from "../api";
 import { useShell } from "../App";
 import CoverGrid, { Art } from "../components/CoverGrid";
+import { LyricsPanel } from "../components/LyricsPanel";
+import { useNowPlayingLyrics } from "../components/Karaoke";
 
 const compact = (n?: number) => (n === undefined ? "" : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n));
 
 export default function Artist() {
   const { id } = useParams();
-  const { play, nowPlaying, canPlay, addToTopTen, addToPlaylist, addAllToPlaylist, open } = useShell();
+  const { play, nowPlaying, canPlay, addToTopTen, addToPlaylist, addAllToPlaylist, open, playbackMs, playbackPaused, seek } = useShell();
   const [artist, setArtist] = useState<ArtistDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const nowLyrics = useNowPlayingLyrics(nowPlaying ? { track: nowPlaying.track, albumTitle: nowPlaying.record.title } : null);
 
   useEffect(() => {
     if (attempt === 0) { setArtist(null); setError(null); }
@@ -33,6 +37,28 @@ export default function Artist() {
   const pool = artist.records;
   return (
     <>
+      {nowPlaying && (
+        <section className="now-playing-panel">
+          <header>
+            <Art src={nowPlaying.record.thumb || nowPlaying.record.cover} alt="" />
+            <div>
+              <strong>Now playing</strong>
+              <span>{nowPlaying.track.title} — {nowPlaying.track.artist || nowPlaying.record.artist}</span>
+            </div>
+            <button className="btn" onClick={() => setLyricsOpen((o) => !o)} aria-expanded={lyricsOpen}>
+              {lyricsOpen ? "Hide lyrics" : "Show lyrics"}
+            </button>
+          </header>
+          {lyricsOpen && (
+            <LyricsPanel
+              lyrics={nowLyrics === null ? "none" : nowLyrics}
+              positionMs={playbackPaused ? null : playbackMs}
+              onSeek={seek}
+            />
+          )}
+        </section>
+      )}
+
       <section className="artist-hero">
         {artist.image && <div className="bg" style={{ backgroundImage: `url("${artist.image}")` }} aria-hidden="true" />}
         <div className="inner">

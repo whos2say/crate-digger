@@ -1,5 +1,5 @@
-import type { ArtistCard, ArtistDetail, Crate, Lyrics, Playlist, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen } from "../server/types";
-export type { ArtistCard, ArtistDetail, Crate, LyricLine, Lyrics, Playlist, PlaylistTrack, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen, TopTenItem, Track } from "../server/types";
+import type { ArtistCard, ArtistDetail, AudioBeats, Crate, Lyrics, Playlist, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen } from "../server/types";
+export type { ArtistCard, ArtistDetail, AudioBeats, Crate, LyricLine, Lyrics, Playlist, PlaylistTrack, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen, TopTenItem, Track } from "../server/types";
 
 const KEY_STORAGE = "crate:key";
 export function getOwnerKey(): string { try { return localStorage.getItem(KEY_STORAGE) ?? ""; } catch { return ""; } }
@@ -54,6 +54,7 @@ export const api = {
     if (q.durationSec) qs.set("duration", String(Math.round(q.durationSec)));
     return call<{ lyrics: Lyrics | null }>(`/api/lyrics?${qs}`).then((r) => r.lyrics);
   },
+  beats: (trackId: string) => call<{ beats: AudioBeats | null }>(`/api/beats/${trackId}`).then((r) => r.beats),
   exportTopTen: (id: string) => call<{ list: TopTen; url: string; matched: number; missed: { title: string; artist: string }[] }>(`/api/toptens/${id}/export`, { method: "POST" }),
   record: (id: string) => call<RecordDetail>(`/api/records/${id}`),
   spotifyConnectUrl: () => `/api/spotify/login${getOwnerKey() ? `?key=${encodeURIComponent(getOwnerKey())}` : ""}`,

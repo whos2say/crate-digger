@@ -251,9 +251,39 @@ img { max-width: 100%; }
 .now-playing .np-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .now-playing .np-text strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .now-playing .np-text span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--paper-dim); }
-.now-playing .np-bar { height: 3px; background: rgba(27,23,18,.15); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.now-playing .np-bar { height: 6px; background: rgba(27,23,18,.15); border-radius: 3px; margin-top: 4px; overflow: hidden; cursor: pointer; }
+.now-playing .np-bar:hover { background: rgba(27,23,18,.25); }
 .now-playing .np-bar i { display: block; height: 100%; background: #1db954; transition: width 1s linear; }
 .now-playing .np-time { color: var(--paper-dim); font-variant-numeric: tabular-nums; flex: none; }
+.now-playing .np-btn.on { background: var(--paper-ink); color: var(--paper); }
+.now-playing .np-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* Karaoke strip: sits directly above the player, three lines, current one big and centered. */
+.karaoke { position: fixed; left: 50%; bottom: calc(max(14px, env(safe-area-inset-bottom, 0px)) + 78px); transform: translateX(-50%); z-index: 39; width: min(720px, calc(100vw - 24px)); background: rgba(15, 13, 16, 0.92); backdrop-filter: blur(8px); border-radius: 10px; padding: 14px 16px; text-align: center; color: rgba(255,255,255,0.9); box-shadow: 0 18px 40px -12px rgba(0,0,0,.8), 0 0 0 1px rgba(255,255,255,.08); display: flex; flex-direction: column; gap: 6px; }
+.karaoke-line { background: none; border: 0; color: inherit; cursor: pointer; font: inherit; padding: 4px 8px; border-radius: 4px; }
+.karaoke-line:disabled { cursor: default; }
+.karaoke-line.prev, .karaoke-line.next { font-size: 14px; opacity: 0.45; min-height: 20px; }
+.karaoke-line.curr { font-size: 22px; line-height: 1.2; font-weight: 600; color: #f4d47a; text-shadow: 0 1px 0 rgba(0,0,0,0.5); min-height: 30px; }
+.karaoke-line:hover:not(:disabled) { background: rgba(255,255,255,0.06); }
+
+/* Visualizer canvas: fills the space above the player without blocking clicks on anything else. */
+.visualizer { position: fixed; inset: 0; z-index: 30; pointer-events: none; background: radial-gradient(ellipse at center, rgba(0,0,0,0.65), rgba(0,0,0,0.9)); }
+.visualizer-canvas { width: 100%; height: 100%; display: block; }
+
+/* Clickable lyric lines (when playback is on this track). */
+.lyric-lines li.seek { cursor: pointer; }
+.lyric-lines li.seek:hover { background: rgba(196, 154, 46, 0.12); }
+
+/* "Now playing" panel at the top of an artist wall: shows the current track and, on toggle, its lyrics. */
+.now-playing-panel { margin: 0 auto 18px; max-width: 900px; padding: 14px 16px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); }
+.now-playing-panel header { display: flex; gap: 12px; align-items: center; }
+.now-playing-panel header img { width: 52px; height: 52px; border-radius: 4px; object-fit: cover; flex: none; }
+.now-playing-panel header > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.now-playing-panel header strong { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sticker); }
+.now-playing-panel header span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.9; }
+.now-playing-panel .lyrics { background: rgba(0,0,0,0.25); color: rgba(255,255,255,0.9); margin: 12px 0 0; max-height: 380px; }
+.now-playing-panel .lyric-lines li { color: rgba(255,255,255,0.5); }
+.now-playing-panel .lyric-lines li.on { color: #f4d47a; background: rgba(196, 154, 46, 0.18); }
 .now-playing .np-btn { width: 36px; height: 36px; border-radius: 50%; border: 1px solid rgba(27,23,18,.25); background: var(--paper-ink); color: var(--paper); font-size: 12px; display: grid; place-items: center; flex: none; }
 .now-playing .np-btn.quiet { background: transparent; color: var(--paper-ink); }
 .app { padding-bottom: 90px; }

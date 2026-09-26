@@ -97,6 +97,12 @@ export default {
         return json({ lyrics: await lyr.getLyrics(ctx, { artist, title, album, durationSec }) }, 200, CACHED);
       }
 
+      // ---- audio beats (Spotify audio-analysis, for the visualizer) ----
+      // Returns { beats: [] } and the client falls back to lyric-line pulses when Spotify's
+      // audio-analysis endpoint is not available for this app (403 on new client-creds tokens).
+      m = path.match(/^\/api\/beats\/([A-Za-z0-9]+)$/);
+      if (m) return json({ beats: await catalog.audioBeats(db, env, m[1]) }, 200, CACHED);
+
       // ---- export a Top Ten to Spotify ----
       m = path.match(/^\/api\/toptens\/([\w-]+)\/export$/);
       if (m && request.method === "POST") {

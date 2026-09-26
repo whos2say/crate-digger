@@ -77,6 +77,14 @@ export interface Sleeve {
 /** One line of a time-synced lyric ("[00:12.34]…"), rebased to milliseconds from the start. */
 export interface LyricLine { ms: number; text: string }
 
+/** Compact music structure the visualizer consumes. Beats, bars and section starts in ms. */
+export interface AudioBeats {
+  beats: number[];
+  bars: number[];
+  sections: { start: number; tempo: number; loudness: number }[];
+  tempo?: number;
+}
+
 /** What LRCLIB knows about a track. Fetched on demand from the record sheet. */
 export interface Lyrics {
   /** Plain lyrics, when the entry has them. Newlines separate lines. */

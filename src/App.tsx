@@ -17,6 +17,7 @@ interface Shell {
   /** Current playback position (ms) — synced-lyrics UI reads this. */
   playbackMs: number;
   playbackPaused: boolean;
+  seek: (ms: number) => void;
   canPlay: boolean;
   refreshStatus: () => void;
   open: (r: Record, pool?: Record[]) => void;
@@ -86,7 +87,7 @@ export default function App() {
   const shell = useMemo<Shell>(() => ({
     status, refreshStatus, openRecord, pool, toast, unlock,
     play: playback.play, nowPlaying: playback.now, canPlay: playback.canPlay,
-    playbackMs: playback.position, playbackPaused: playback.paused,
+    playbackMs: playback.position, playbackPaused: playback.paused, seek: playback.seek,
     open: (r, p) => { setOpenRecord(r); if (p) setPool(p); },
     close: () => setOpenRecord(null),
     addToTopTen: (record, track) => { if (!needUnlock()) setPicker({ kind: "topten", record, track }); },

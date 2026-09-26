@@ -59,6 +59,8 @@ globalThis.fetch = async (url, init = {}) => {
     if (path === "/artists/art1") return Response.json({ ...artistLite, images, genres: ["deep house"], followers: { total: 12345 }, popularity: 40 });
     if (path.startsWith("/artists/art1/top-tracks")) return Response.json({ tracks: [{ ...track("t1", "Blue Moon - Original Mix", 1), album: album("alb1", "Blue Moon", 1994) }] });
     if (path.startsWith("/artists/art1/albums")) return Response.json({ items: [album("alb1", "Blue Moon", 1994), album("alb3", "Later", 1998)] });
+    if (path.startsWith("/audio-analysis/t1")) return Response.json({ beats: [{ start: 0.5 }, { start: 1.0 }, { start: 1.5 }], bars: [{ start: 0.5 }, { start: 2.5 }], sections: [{ start: 0, tempo: 122, loudness: -10 }], track: { tempo: 122 } });
+    if (path.startsWith("/audio-analysis/")) return new Response(JSON.stringify({ error: { status: 403, message: "This endpoint is not available." } }), { status: 403 });
     if (path.startsWith("/albums/alb1/tracks")) return Response.json({ items: [track("t1", "Blue Moon - Original Mix", 1)] });
     if (path.startsWith("/albums/alb1")) return Response.json({ ...album("alb1", "Blue Moon", 1994, { label: "Nu Groove", genres: [] }), total_tracks: 2, tracks: { items: [track("t1", "Blue Moon - Original Mix", 1), track("t2", "Dub", 2)] } });
     if (path.startsWith("/albums/nope")) return new Response("{}", { status: 404 });
@@ -181,6 +183,17 @@ test("lyrics: LRCLIB is only consulted on demand; plain + synced come back parse
   assert.equal(miss.status, 200); assert.equal(miss.body.lyrics, null);
   assert.equal((await req("/api/lyrics?title=x")).status, 400);
   assert.ok(calls.lrclib > before);
+});
+
+test("beats: audio-analysis becomes compact beat/bar/section timings; 403 caches as null so the visualizer falls back", async () => {
+  const ok = await j(await req("/api/beats/t1"));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.body.beats.beats, [500, 1000, 1500]);
+  assert.deepEqual(ok.body.beats.bars, [500, 2500]);
+  assert.equal(ok.body.beats.tempo, 122);
+  assert.equal(ok.body.beats.sections[0].loudness, -10);
+  const miss = await j(await req("/api/beats/tXXX"));
+  assert.equal(miss.status, 200); assert.equal(miss.body.beats, null);
 });
 
 test("image proxy: allowlist + cache headers", async () => {

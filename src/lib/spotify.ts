@@ -15,6 +15,7 @@ interface SdkPlayer {
   addListener(event: string, cb: (state: any) => void): void; // eslint-disable-line @typescript-eslint/no-explicit-any
   pause(): Promise<void>;
   resume(): Promise<void>;
+  seek(ms: number): Promise<void>;
 }
 
 export type Lane = "sdk" | "preview";
@@ -81,6 +82,11 @@ export async function pausePlayer(): Promise<void> {
 
 export async function resumePlayer(): Promise<void> {
   try { await player?.resume(); } catch { /* nothing to resume */ }
+}
+
+/** Jump the currently playing track to a specific millisecond offset. */
+export async function seekPlayer(ms: number): Promise<void> {
+  try { await player?.seek(Math.max(0, Math.round(ms))); } catch { /* not playing, or SDK not connected */ }
 }
 
 export function onPlayerState(cb: (s: { paused: boolean; position: number; duration: number; uri?: string }) => void): void {

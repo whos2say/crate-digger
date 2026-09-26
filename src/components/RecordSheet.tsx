@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, getPalette, loadPalette, paletteDistance, retryDelayMs, type Lyrics, type Record, type RecordDetail, type Sleeve, type Track } from "../api";
+import { LyricsPanel } from "./LyricsPanel";
 import { useShell } from "../App";
 import { Art } from "./CoverGrid";
 
@@ -12,7 +13,7 @@ function durationToSec(s?: string): number {
 }
 
 export default function RecordSheet({ record }: { record: Record }) {
-  const { close, addToTopTen, addToPlaylist, pool, open, status, play, nowPlaying, canPlay, playbackMs, playbackPaused } = useShell();
+  const { close, addToTopTen, addToPlaylist, pool, open, status, play, nowPlaying, canPlay, playbackMs, playbackPaused, seek } = useShell();
   const [detail, setDetail] = useState<RecordDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [similar, setSimilar] = useState<Record[] | null>(null);
@@ -172,6 +173,7 @@ export default function RecordSheet({ record }: { record: Record }) {
                         lyrics={lyr}
                         // Only follow along when THIS track is the one currently playing.
                         positionMs={isPlaying(t) && !playbackPaused ? playbackMs : null}
+                        onSeek={isPlaying(t) ? seek : undefined}
                       />
                     )}
                   </li>
@@ -185,41 +187,5 @@ export default function RecordSheet({ record }: { record: Record }) {
         </div>
       </aside>
     </>
-  );
-}
-
-/** The per-track lyrics panel. Plain lyrics render as flowing text; synced lyrics render one line
- *  per row, with the current line highlighted from the player's position and auto-scrolled into
- *  view. `positionMs` is null unless THIS track is playing, so opening lyrics on any other track
- *  in the tracklist just shows the words without the ticker. */
-function LyricsPanel({ lyrics, positionMs }: { lyrics: Lyrics | "loading" | "none" | undefined; positionMs: number | null }) {
-  if (!lyrics || lyrics === "loading") return <div className="lyrics"><p className="notes">Looking this up on LRCLIB…</p></div>;
-  if (lyrics === "none") return <div className="lyrics"><p className="notes">LRCLIB has no lyrics for this track.</p></div>;
-  const activeIdx = useMemo(() => {
-    if (!lyrics.synced?.length || positionMs === null) return -1;
-    // Last line whose timestamp is ≤ current position. Binary search since lines are already sorted.
-    let lo = 0, hi = lyrics.synced.length - 1, ans = -1;
-    while (lo <= hi) { const mid = (lo + hi) >> 1; if (lyrics.synced[mid].ms <= positionMs) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
-    return ans;
-  }, [lyrics, positionMs]);
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (activeIdx < 0 || !boxRef.current) return;
-    const el = boxRef.current.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
-    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [activeIdx]);
-  return (
-    <div className="lyrics" ref={boxRef}>
-      {lyrics.synced?.length ? (
-        <ol className="lyric-lines">
-          {lyrics.synced.map((line, i) => (
-            <li key={i} data-idx={i} className={i === activeIdx ? "on" : ""}>{line.text || <span aria-hidden>♪</span>}</li>
-          ))}
-        </ol>
-      ) : (
-        <pre className="lyric-plain">{lyrics.plain}</pre>
-      )}
-      <p className="via">via <a href={lyrics.url ?? "https://lrclib.net"} target="_blank" rel="noopener">LRCLIB</a></p>
-    </div>
   );
 }
