@@ -23,7 +23,7 @@ const artistLite = { id: "art1", name: "Loose Ends", external_urls: { spotify: "
 const album = (id, name, y, extra = {}) => ({ id, name, album_type: "album", release_date: `${y}-01-01`, images, artists: [artistLite], external_urls: { spotify: `https://open.spotify.com/album/${id}` }, ...extra });
 const track = (id, name, n, dur = 372000, alb) => ({ id, uri: `spotify:track:${id}`, name, duration_ms: dur, track_number: n, artists: [artistLite], external_urls: { spotify: `https://open.spotify.com/track/${id}` }, album: alb ?? { name: "Blue Moon" } });
 
-const calls = { spotify: 0, discogs: 0, tokenGrants: [], playlists: [], added: {}, replaced: {} };
+const calls = { spotify: 0, discogs: 0, lrclib: 0, tokenGrants: [], playlists: [], added: {}, replaced: {} };
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url);
   const body = init.body ? String(init.body) : "";
@@ -77,6 +77,19 @@ globalThis.fetch = async (url, init = {}) => {
     if (u.includes("/masters/100")) return Response.json({ id: 100, title: "Blue Moon", year: 1994, artists: [{ name: "Loose Ends (2)" }], genres: ["Electronic"], styles: ["Deep House"], main_release: 200, tracklist: [{ position: "A1", title: "Blue Moon (Original)", duration: "6:12" }] });
     if (u.includes("/releases/200")) return Response.json({ id: 200, title: "Blue Moon", country: "US", labels: [{ name: "Nu Groove", catno: "NG-042" }], formats: [{ name: "Vinyl", descriptions: ["12\""] }], notes: "Pressed at [l123]Frankford Wayne[/l]." });
     return new Response("nope", { status: 404 });
+  }
+  if (u.startsWith("https://lrclib.net/api/")) {
+    calls.lrclib++;
+    const path = u.slice("https://lrclib.net/api".length);
+    // Only "Blue Moon" has a canned lyric; everything else 404s so the "no lyrics" path is exercised.
+    if (path.startsWith("/get?")) {
+      const p = new URL(u).searchParams;
+      if (/loose ends/i.test(p.get("artist_name") ?? "") && /blue moon/i.test(p.get("track_name") ?? ""))
+        return Response.json({ id: 42, plainLyrics: "moon in the blue\nrise and shine", syncedLyrics: "[00:01.00]moon in the blue\n[00:04.50]rise and shine" });
+      return new Response("not found", { status: 404 });
+    }
+    if (path.startsWith("/search?")) return Response.json([]);
+    return new Response("", { status: 404 });
   }
   if (u.startsWith("https://i.scdn.co/") || u.startsWith("https://i.discogs.com/")) return new Response(new Uint8Array([255, 216, 255]), { headers: { "Content-Type": "image/jpeg" } });
   return new Response("nope", { status: 404 });
@@ -151,6 +164,23 @@ test("sleeve: Discogs is consulted only on demand and returns label, catno, form
   assert.equal(s.body.sleeve.url, "https://www.discogs.com/master/100");
   assert.ok(calls.discogs > before);
   assert.equal((await req("/api/sleeve?artist=x&title=y", {}, { ...env, DISCOGS_TOKEN: "" })).status, 401);
+});
+
+test("lyrics: LRCLIB is only consulted on demand; plain + synced come back parsed; misses are cached", async () => {
+  const before = calls.lrclib;
+  const l = await j(await req("/api/lyrics?artist=Loose+Ends&title=Blue+Moon&album=Blue+Moon&duration=372"));
+  assert.equal(l.status, 200); assert.ok(l.body.lyrics); assert.equal(l.body.lyrics.source, "lrclib");
+  assert.equal(l.body.lyrics.plain, "moon in the blue\nrise and shine");
+  assert.deepEqual(l.body.lyrics.synced, [{ ms: 1000, text: "moon in the blue" }, { ms: 4500, text: "rise and shine" }]);
+  const after = calls.lrclib;
+  // Second call is cached, LRCLIB is not hit again.
+  await req("/api/lyrics?artist=Loose+Ends&title=Blue+Moon&album=Blue+Moon&duration=372");
+  assert.equal(calls.lrclib, after);
+  // Unknown track resolves to null (not an error) so the panel can say "no lyrics".
+  const miss = await j(await req("/api/lyrics?artist=Nobody&title=Nothing&duration=200"));
+  assert.equal(miss.status, 200); assert.equal(miss.body.lyrics, null);
+  assert.equal((await req("/api/lyrics?title=x")).status, 400);
+  assert.ok(calls.lrclib > before);
 });
 
 test("image proxy: allowlist + cache headers", async () => {

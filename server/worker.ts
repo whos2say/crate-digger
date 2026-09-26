@@ -5,6 +5,7 @@ import { ensureSchema, type D1Like } from "./db";
 import * as catalog from "./catalog";
 import * as dg from "./discogs";
 import * as lists from "./lists";
+import * as lyr from "./lyrics";
 import { renderShare } from "./share";
 import * as sp from "./spotify";
 import type { Status } from "./types";
@@ -85,6 +86,15 @@ export default {
         if (!artist || !title) return err("Need artist and title.", 400);
         const y = Number(url.searchParams.get("year"));
         return json({ sleeve: await dg.sleeve(ctx, artist, title, y || undefined) }, 200, CACHED);
+      }
+
+      // ---- lyrics (LRCLIB, on demand) ----
+      if (path === "/api/lyrics") {
+        const artist = url.searchParams.get("artist"), title = url.searchParams.get("title");
+        if (!artist || !title) return err("Need artist and title.", 400);
+        const album = url.searchParams.get("album") ?? undefined;
+        const durationSec = Number(url.searchParams.get("duration")) || undefined;
+        return json({ lyrics: await lyr.getLyrics(ctx, { artist, title, album, durationSec }) }, 200, CACHED);
       }
 
       // ---- export a Top Ten to Spotify ----

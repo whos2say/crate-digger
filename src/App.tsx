@@ -14,6 +14,9 @@ interface Shell {
   /** Full-track playback through Spotify Premium; opens the track in Spotify when that isn't available. */
   play: (record: Record, track: Track) => void;
   nowPlaying: { record: Record; track: Track } | null;
+  /** Current playback position (ms) — synced-lyrics UI reads this. */
+  playbackMs: number;
+  playbackPaused: boolean;
   canPlay: boolean;
   refreshStatus: () => void;
   open: (r: Record, pool?: Record[]) => void;
@@ -83,6 +86,7 @@ export default function App() {
   const shell = useMemo<Shell>(() => ({
     status, refreshStatus, openRecord, pool, toast, unlock,
     play: playback.play, nowPlaying: playback.now, canPlay: playback.canPlay,
+    playbackMs: playback.position, playbackPaused: playback.paused,
     open: (r, p) => { setOpenRecord(r); if (p) setPool(p); },
     close: () => setOpenRecord(null),
     addToTopTen: (record, track) => { if (!needUnlock()) setPicker({ kind: "topten", record, track }); },

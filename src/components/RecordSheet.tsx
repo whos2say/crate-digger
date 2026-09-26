@@ -1,16 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, getPalette, loadPalette, paletteDistance, retryDelayMs, type Record, type RecordDetail, type Sleeve, type Track } from "../api";
+import { api, getPalette, loadPalette, paletteDistance, retryDelayMs, type Lyrics, type Record, type RecordDetail, type Sleeve, type Track } from "../api";
 import { useShell } from "../App";
 import { Art } from "./CoverGrid";
 
+/** "3:42" → 222 seconds; returns 0 for unset. Used as a hint to LRCLIB. */
+function durationToSec(s?: string): number {
+  if (!s) return 0;
+  const m = s.match(/^(\d+):(\d{2})$/);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : 0;
+}
+
 export default function RecordSheet({ record }: { record: Record }) {
-  const { close, addToTopTen, addToPlaylist, pool, open, status, play, nowPlaying, canPlay } = useShell();
+  const { close, addToTopTen, addToPlaylist, pool, open, status, play, nowPlaying, canPlay, playbackMs, playbackPaused } = useShell();
   const [detail, setDetail] = useState<RecordDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [similar, setSimilar] = useState<Record[] | null>(null);
   const [sleeve, setSleeve] = useState<Sleeve | null | "loading" | "none">(null);
   const [attempt, setAttempt] = useState(0);
+  // Lyrics are per-track and lazy: one call the first time a track's lyrics are opened.
+  // Cached in this sheet's state so toggling the panel doesn't refetch.
+  const [lyricsById, setLyricsById] = useState<{ [key: string]: Lyrics | "loading" | "none" }>({});
+  const [lyricsOpen, setLyricsOpen] = useState<{ [key: string]: boolean }>({});
   const navigate = useNavigate();
   const sleevesOn = !!status?.discogs.token;
 
@@ -49,6 +60,24 @@ export default function RecordSheet({ record }: { record: Record }) {
     setSleeve("loading");
     try { const s = await api.sleeve({ artist: record.artist.split(",")[0], title: record.title, year: record.year }); setSleeve(s ?? "none"); }
     catch (e) { setSleeve("none"); if (e instanceof Error) setError(e.message); }
+  };
+
+  const trackKey = (t: Track) => t.spotifyUri ?? `${t.position}:${t.title}`;
+
+  const toggleLyrics = async (t: Track) => {
+    const k = trackKey(t);
+    setLyricsOpen((o) => ({ ...o, [k]: !o[k] }));
+    if (lyricsById[k]) return; // fetch once
+    setLyricsById((s) => ({ ...s, [k]: "loading" }));
+    try {
+      const l = await api.lyrics({
+        artist: t.artist || detail?.artist || record.artist,
+        title: t.title,
+        album: detail?.title ?? record.title,
+        durationSec: durationToSec(t.duration),
+      });
+      setLyricsById((s) => ({ ...s, [k]: l ?? "none" }));
+    } catch { setLyricsById((s) => ({ ...s, [k]: "none" })); }
   };
 
   const browse = (params: { [k: string]: string }) => { close(); navigate("/?" + new URLSearchParams(params)); };
@@ -121,18 +150,33 @@ export default function RecordSheet({ record }: { record: Record }) {
           {detail && !detail.tracks.length && <p className="notes">Spotify has no tracklist for this one.</p>}
           {detail && detail.tracks.length > 0 && (
             <ol className="tracks">
-              {detail.tracks.map((t, i) => (
-                <li key={i}>
-                  <span className="pos">{t.position}</span>
-                  <span>{t.title}{t.artist && t.artist !== detail.artist && <small style={{ display: "block", opacity: 0.7 }}>{t.artist}</small>}</span>
-                  <span className="dur">{t.duration}</span>
-                  <span style={{ display: "flex", gap: 4 }}>
-                    <button className={`play ${isPlaying(t) ? "on" : ""}`} onClick={() => play(record, t)} title={canPlay ? "Play" : "Open in Spotify"} aria-label="Play">▶</button>
-                    <button className="add" onClick={() => addToTopTen(record, t)} title="Add this track to a Top Ten">+ 10</button>
-                    <button className="add" onClick={() => addToPlaylist(record, t)}>+ set</button>
-                  </span>
-                </li>
-              ))}
+              {detail.tracks.map((t, i) => {
+                const k = trackKey(t);
+                const lyr = lyricsById[k];
+                const open = !!lyricsOpen[k];
+                return (
+                  <li key={i} className={open ? "with-lyrics" : ""}>
+                    <div className="row">
+                      <span className="pos">{t.position}</span>
+                      <span>{t.title}{t.artist && t.artist !== detail.artist && <small style={{ display: "block", opacity: 0.7 }}>{t.artist}</small>}</span>
+                      <span className="dur">{t.duration}</span>
+                      <span style={{ display: "flex", gap: 4 }}>
+                        <button className={`play ${isPlaying(t) ? "on" : ""}`} onClick={() => play(record, t)} title={canPlay ? "Play" : "Open in Spotify"} aria-label="Play">▶</button>
+                        <button className={`add ${open ? "on" : ""}`} onClick={() => toggleLyrics(t)} title="Show lyrics" aria-label="Lyrics" aria-expanded={open}>♪</button>
+                        <button className="add" onClick={() => addToTopTen(record, t)} title="Add this track to a Top Ten">+ 10</button>
+                        <button className="add" onClick={() => addToPlaylist(record, t)}>+ set</button>
+                      </span>
+                    </div>
+                    {open && (
+                      <LyricsPanel
+                        lyrics={lyr}
+                        // Only follow along when THIS track is the one currently playing.
+                        positionMs={isPlaying(t) && !playbackPaused ? playbackMs : null}
+                      />
+                    )}
+                  </li>
+                );
+              })}
             </ol>
           )}
           {detail && !canPlay && status?.spotify.connected && (
@@ -141,5 +185,41 @@ export default function RecordSheet({ record }: { record: Record }) {
         </div>
       </aside>
     </>
+  );
+}
+
+/** The per-track lyrics panel. Plain lyrics render as flowing text; synced lyrics render one line
+ *  per row, with the current line highlighted from the player's position and auto-scrolled into
+ *  view. `positionMs` is null unless THIS track is playing, so opening lyrics on any other track
+ *  in the tracklist just shows the words without the ticker. */
+function LyricsPanel({ lyrics, positionMs }: { lyrics: Lyrics | "loading" | "none" | undefined; positionMs: number | null }) {
+  if (!lyrics || lyrics === "loading") return <div className="lyrics"><p className="notes">Looking this up on LRCLIB…</p></div>;
+  if (lyrics === "none") return <div className="lyrics"><p className="notes">LRCLIB has no lyrics for this track.</p></div>;
+  const activeIdx = useMemo(() => {
+    if (!lyrics.synced?.length || positionMs === null) return -1;
+    // Last line whose timestamp is ≤ current position. Binary search since lines are already sorted.
+    let lo = 0, hi = lyrics.synced.length - 1, ans = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (lyrics.synced[mid].ms <= positionMs) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+    return ans;
+  }, [lyrics, positionMs]);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (activeIdx < 0 || !boxRef.current) return;
+    const el = boxRef.current.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [activeIdx]);
+  return (
+    <div className="lyrics" ref={boxRef}>
+      {lyrics.synced?.length ? (
+        <ol className="lyric-lines">
+          {lyrics.synced.map((line, i) => (
+            <li key={i} data-idx={i} className={i === activeIdx ? "on" : ""}>{line.text || <span aria-hidden>♪</span>}</li>
+          ))}
+        </ol>
+      ) : (
+        <pre className="lyric-plain">{lyrics.plain}</pre>
+      )}
+      <p className="via">via <a href={lyrics.url ?? "https://lrclib.net"} target="_blank" rel="noopener">LRCLIB</a></p>
+    </div>
   );
 }

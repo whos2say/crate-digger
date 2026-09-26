@@ -1,5 +1,5 @@
-import type { ArtistCard, ArtistDetail, Crate, Playlist, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen } from "../server/types";
-export type { ArtistCard, ArtistDetail, Crate, Playlist, PlaylistTrack, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen, TopTenItem, Track } from "../server/types";
+import type { ArtistCard, ArtistDetail, Crate, Lyrics, Playlist, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen } from "../server/types";
+export type { ArtistCard, ArtistDetail, Crate, LyricLine, Lyrics, Playlist, PlaylistTrack, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen, TopTenItem, Track } from "../server/types";
 
 const KEY_STORAGE = "crate:key";
 export function getOwnerKey(): string { try { return localStorage.getItem(KEY_STORAGE) ?? ""; } catch { return ""; } }
@@ -47,6 +47,12 @@ export const api = {
   sleeve: (q: { artist: string; title: string; year?: number }) => {
     const qs = new URLSearchParams({ artist: q.artist, title: q.title, ...(q.year ? { year: String(q.year) } : {}) });
     return call<{ sleeve: Sleeve | null }>(`/api/sleeve?${qs}`).then((r) => r.sleeve);
+  },
+  lyrics: (q: { artist: string; title: string; album?: string; durationSec?: number }) => {
+    const qs = new URLSearchParams({ artist: q.artist, title: q.title });
+    if (q.album) qs.set("album", q.album);
+    if (q.durationSec) qs.set("duration", String(Math.round(q.durationSec)));
+    return call<{ lyrics: Lyrics | null }>(`/api/lyrics?${qs}`).then((r) => r.lyrics);
   },
   exportTopTen: (id: string) => call<{ list: TopTen; url: string; matched: number; missed: { title: string; artist: string }[] }>(`/api/toptens/${id}/export`, { method: "POST" }),
   record: (id: string) => call<RecordDetail>(`/api/records/${id}`),

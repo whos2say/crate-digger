@@ -74,6 +74,20 @@ export interface Sleeve {
   cover?: string;
 }
 
+/** One line of a time-synced lyric ("[00:12.34]…"), rebased to milliseconds from the start. */
+export interface LyricLine { ms: number; text: string }
+
+/** What LRCLIB knows about a track. Fetched on demand from the record sheet. */
+export interface Lyrics {
+  /** Plain lyrics, when the entry has them. Newlines separate lines. */
+  plain?: string;
+  /** Time-synced lines, when the entry has them; use for the highlighted-current-line UI. */
+  synced?: LyricLine[];
+  source: "lrclib";
+  /** Deep link to the LRCLIB record for attribution. */
+  url?: string;
+}
+
 export interface ArtistCard {
   id: string;
   name: string;
