@@ -196,8 +196,9 @@ function dedupeAlbums(albums: SpAlbum[]): SpAlbum[] {
   return out;
 }
 
-const PAGE = 40;
-const TRACK_PAGE = 50;
+const PAGE = 20;
+// Spotify's /search endpoint now rejects limit=50 with "Invalid limit"; the safe max here is 20.
+const TRACK_PAGE = 20;
 
 // Spotify's `genre:` filter only applies to track and artist searches, never albums. So any
 // genre browse searches tracks and builds the crate from the albums those tracks sit on: one
@@ -251,7 +252,6 @@ export async function search(db: D1Like | null, env: SpotifyEnv, p: SearchParams
 }
 
 async function albumSearch(db: D1Like | null, env: SpotifyEnv, q: string, page: number, withArtists: boolean, typed?: string): Promise<{ records: Record[]; artists: ArtistCard[]; page: number; pages: number }> {
-  const p = { q: typed };
   const types = withArtists ? "album,artist" : "album";
   const qs = new URLSearchParams({ q, type: types, limit: String(PAGE), offset: String((page - 1) * PAGE), market: MARKET });
   const data = await get<{ albums?: { items: SpAlbum[]; total: number }; artists?: { items: SpArtist[] } }>(db, env, `/search?${qs}`);
@@ -259,7 +259,7 @@ async function albumSearch(db: D1Like | null, env: SpotifyEnv, q: string, page: 
   const artistItems = (data.artists?.items ?? []).filter((a) => a.images?.length);
   // Typed an artist's name? Put that artist first and lead the crate with their own records,
   // not just albums whose titles happen to contain the words.
-  const wanted = normalizeName(p.q ?? "");
+  const wanted = normalizeName(typed ?? "");
   const exactIdx = wanted ? artistItems.findIndex((a) => normalizeName(a.name) === wanted) : -1;
   if (exactIdx > 0) artistItems.unshift(...artistItems.splice(exactIdx, 1));
   if (exactIdx >= 0 && page === 1) {
