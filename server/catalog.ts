@@ -317,3 +317,5 @@ export async function getRecord(db: D1Like | null, env: SpotifyEnv, id: string):
     releaseDate: album.release_date,
   };
 }
+
+export async function appTokenForDebug(db: D1Like | null, env: SpotifyEnv): Promise<string> { return appAccessToken(db, env); }

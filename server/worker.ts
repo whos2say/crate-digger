@@ -51,6 +51,32 @@ export default {
       }
       if (path === "/api/health") return json({ ok: true, db: !!db, spotify: sp.configured(env), discogsToken: !!ctx.token, time: new Date().toISOString() });
 
+      if (path === "/api/debug/spotify") {
+        // Temporary: probe Spotify with different query shapes so we can see what its search endpoint accepts right now.
+        const token = await catalog.appTokenForDebug(db, env);
+        const urls = [
+          `/search?q=genre%3Adisney&type=track&limit=20&offset=0&market=US`,
+          `/search?q=genre%3Adisney&type=track&limit=20&market=US`,
+          `/search?q=genre%3Adisney&type=track&limit=20`,
+          `/search?q=genre%3Adisney&type=track`,
+          `/search?q=disney&type=track&limit=20`,
+          `/search?q=disney&type=album&limit=20`,
+          `/search?q=disney&type=track&limit=1`,
+          `/search?q=disney&type=track&limit=50`,
+          `/search?q=year%3A1990-1999+genre%3Adisney&type=track&limit=20`,
+          `/browse/categories?limit=20`,
+        ];
+        const results = [] as { url: string; status: number; msg?: string; total?: number }[];
+        for (const u of urls) {
+          const r = await fetch(`https://api.spotify.com/v1${u}`, { headers: { Authorization: `Bearer ${token}` } });
+          const body = await r.text();
+          let msg: string | undefined; let total: number | undefined;
+          try { const b = JSON.parse(body); msg = b.error?.message; total = b.tracks?.total ?? b.albums?.total ?? b.categories?.total; } catch { msg = body.slice(0, 80); }
+          results.push({ url: u, status: r.status, msg, total });
+        }
+        return json({ results });
+      }
+
       // ---- images (fallback + palette reads; the browser loads covers straight from the CDN) ----
       if (path === "/api/image") {
         const u = url.searchParams.get("u");
