@@ -116,7 +116,10 @@ export default {
 
       return err("No such route.", 404);
     } catch (e) {
-      if (e instanceof dg.DiscogsError) return err(e.message, e.status);
+      if (e instanceof dg.DiscogsError) {
+        const extra: Record<string, string> = e.status === 429 ? { "Retry-After": String(Math.ceil((e.retryAfterMs ?? 8000) / 1000)) } : {};
+        return json({ error: e.message, retryAfter: e.retryAfterMs ? Math.ceil(e.retryAfterMs / 1000) : undefined }, e.status, extra);
+      }
       console.error("worker error", e);
       return err(e instanceof Error ? e.message : "Something broke.", 500);
     }

@@ -27,7 +27,9 @@ export default function RecordSheet({ record }: { record: Record }) {
     const me = getPalette(record) ?? (await loadPalette(record));
     if (!me) return;
     const candidates = pool.filter((p) => p.id !== record.id);
-    await Promise.all(candidates.slice(0, 120).map(loadPalette));
+    // A few at a time: every cover is an image-proxy request, and a burst of 120 trips rate limits.
+    const queue = candidates.slice(0, 60);
+    await Promise.all(Array.from({ length: 6 }, async () => { for (let c = queue.shift(); c; c = queue.shift()) await loadPalette(c); }));
     const ranked = candidates
       .map((c) => ({ c, d: getPalette(c) ? paletteDistance(me, getPalette(c)!) : 9 }))
       .sort((a, b) => a.d - b.d).slice(0, 8).map((x) => x.c);

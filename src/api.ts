@@ -5,7 +5,16 @@ const KEY_STORAGE = "crate:key";
 export function getOwnerKey(): string { try { return localStorage.getItem(KEY_STORAGE) ?? ""; } catch { return ""; } }
 export function setOwnerKey(k: string) { try { k ? localStorage.setItem(KEY_STORAGE, k) : localStorage.removeItem(KEY_STORAGE); } catch {} }
 
-export class ApiError extends Error { constructor(message: string, public status: number) { super(message); } }
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public retryAfter?: number) { super(message); }
+}
+
+// A 429 is a "wait, then try again", not a dead end. Both Discogs (via the worker) and the
+// hosting platform can answer 429; the worker says how long, the platform may not.
+export function retryDelayMs(e: unknown): number | null {
+  if (!(e instanceof ApiError) || e.status !== 429) return null;
+  return Math.min(60, Math.max(2, e.retryAfter ?? 8)) * 1000;
+}
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: { [k: string]: string } = { ...(init.headers as { [k: string]: string }) };
@@ -16,7 +25,13 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const text = await res.text();
   let data: unknown = null;
   try { data = text ? JSON.parse(text) : null; } catch { /* html error page */ }
-  if (!res.ok) throw new ApiError((data as { error?: string })?.error ?? `Request failed (${res.status})`, res.status);
+  if (!res.ok) {
+    const body = data as { error?: string; retryAfter?: number } | null;
+    const headerRetry = Number(res.headers.get("Retry-After"));
+    const retryAfter = body?.retryAfter ?? (Number.isFinite(headerRetry) && headerRetry > 0 ? headerRetry : undefined);
+    const message = body?.error ?? (res.status === 429 ? "Too many requests right now." : `Request failed (${res.status})`);
+    throw new ApiError(message, res.status, retryAfter);
+  }
   return data as T;
 }
 

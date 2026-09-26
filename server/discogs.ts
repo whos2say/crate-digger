@@ -11,16 +11,34 @@ const FRESH_MS = 7 * 24 * 3600 * 1000; // a week: release metadata barely moves
 const SEARCH_FRESH_MS = 24 * 3600 * 1000;
 
 const memory = new Map<string, { status: number; body: string; fetchedAt: number }>();
+// Identical requests in flight share one Discogs call: a crate of 40 covers opens with several
+// sheets and palette reads that all want the same handful of releases.
+const inflight = new Map<string, Promise<unknown>>();
 let backoffUntil = 0;
+const BACKOFF_DEFAULT_MS = 8_000;
+const BACKOFF_MAX_MS = 60_000;
 
 export class DiscogsError extends Error {
-  constructor(message: string, public status: number) { super(message); }
+  constructor(message: string, public status: number, public retryAfterMs?: number) { super(message); }
+}
+
+function rateLimited(): DiscogsError {
+  const wait = Math.max(1000, backoffUntil - Date.now());
+  return new DiscogsError(`Discogs is rate limiting us. Retrying in ${Math.ceil(wait / 1000)}s.`, 429, wait);
 }
 
 export interface Ctx { db: D1Like | null; token: string | null }
 
 async function cached(ctx: Ctx, path: string, freshMs = FRESH_MS): Promise<unknown> {
   const key = "dg:" + path;
+  const pending = inflight.get(key);
+  if (pending) return pending;
+  const p = cachedUncoalesced(ctx, key, path, freshMs).finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+async function cachedUncoalesced(ctx: Ctx, key: string, path: string, freshMs: number): Promise<unknown> {
   const now = Date.now();
   let hit = memory.get(key) ?? null;
   if (!hit && ctx.db) {
@@ -35,7 +53,7 @@ async function cached(ctx: Ctx, path: string, freshMs = FRESH_MS): Promise<unkno
 
   if (now < backoffUntil) {
     if (hit && hit.status === 200) return JSON.parse(hit.body);
-    throw new DiscogsError("Discogs is rate limiting us. Try again in a moment.", 429);
+    throw rateLimited();
   }
 
   const headers: { [k: string]: string } = { "User-Agent": UA, Accept: "application/vnd.discogs.v2.discogs+json" };
@@ -48,10 +66,16 @@ async function cached(ctx: Ctx, path: string, freshMs = FRESH_MS): Promise<unkno
     throw new DiscogsError("Could not reach Discogs. " + (e instanceof Error ? e.message : ""), 502);
   }
   if (res.status === 429) {
-    backoffUntil = Date.now() + 20_000;
+    // Discogs meters a rolling 60 s window and says how long to wait; fall back to a short pause.
+    const retryAfter = Number(res.headers.get("Retry-After") ?? NaN);
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, BACKOFF_MAX_MS) : BACKOFF_DEFAULT_MS;
+    backoffUntil = Math.max(backoffUntil, Date.now() + waitMs);
     if (hit && hit.status === 200) return JSON.parse(hit.body);
-    throw new DiscogsError("Discogs is rate limiting us. Try again in a moment.", 429);
+    throw rateLimited();
   }
+  // Ease off before the window is exhausted, so one busy crate does not black out the next click.
+  const remainingHeader = res.headers.get("X-Discogs-Ratelimit-Remaining");
+  if (remainingHeader !== null && Number(remainingHeader) <= 1) backoffUntil = Math.max(backoffUntil, Date.now() + 3_000);
   const body = await res.text();
   if (res.status === 200) {
     const entry = { status: 200, body, fetchedAt: Date.now() };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, shuffle, type Record } from "../api";
+import { api, retryDelayMs, shuffle, type Record } from "../api";
 import { useShell } from "../App";
 import CoverGrid from "../components/CoverGrid";
 
@@ -17,10 +17,12 @@ export default function Crate() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryIn, setRetryIn] = useState<number | null>(null);
   const [title, setTitle] = useState<string>("");
   const [query, setQuery] = useState(params.get("q") ?? "");
   const [labelQ, setLabelQ] = useState(params.get("label") ?? "");
   const seq = useRef(0);
+  const retries = useRef(0);
 
   const hasToken = status?.discogs.token ?? false;
   const crateKey = params.get("crate");
@@ -62,10 +64,19 @@ export default function Crate() {
       if (my !== seq.current) return;
       setError(e instanceof Error ? e.message : "Something broke");
       if (!append) setRecords([]);
+      const delay = retryDelayMs(e);
+      if (delay && retries.current < 3) {
+        // Rate limited: count down and flip the same page again instead of leaving a dead card.
+        retries.current += 1;
+        const until = Date.now() + delay;
+        setRetryIn(Math.ceil(delay / 1000));
+        const tick = window.setInterval(() => setRetryIn(Math.max(0, Math.ceil((until - Date.now()) / 1000))), 500);
+        window.setTimeout(() => { window.clearInterval(tick); setRetryIn(null); if (my === seq.current) load(p, append); }, delay);
+      }
     } finally { if (my === seq.current) setLoading(false); }
   }, [mode, params, activeCrate, hasToken, browse]);
 
-  useEffect(() => { if (status) load(1, false); }, [load, status, params.get("dig")]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { retries.current = 0; if (status) load(1, false); }, [load, status, params.get("dig")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (next: { [k: string]: string }) => { setParams(next); window.scrollTo({ top: 0 }); };
   const dig = () => set({ dig: String(Date.now()) });
@@ -116,7 +127,13 @@ export default function Crate() {
         <span className="count">{countLabel}</span>
       </div>
 
-      {error && <div className="notice error"><h3>Couldn’t load that crate</h3><p>{error}</p></div>}
+      {error && (
+        <div className="notice error">
+          <h3>{retryIn !== null ? "Discogs is busy" : "Couldn’t load that crate"}</h3>
+          <p>{retryIn !== null ? `Too many requests in the last minute. Flipping again in ${retryIn}s…` : error}</p>
+          {retryIn === null && <button className="btn" onClick={() => { retries.current = 0; load(page, false); }}>Try again</button>}
+        </div>
+      )}
       {!error && !loading && !records.length && status && (
         <div className="empty"><h2>Nothing in this crate yet</h2><p>Try another divider, search for a record, or hit Keep digging.</p></div>
       )}

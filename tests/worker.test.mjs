@@ -103,3 +103,29 @@ test("playlists CRUD with notes", async () => {
   assert.equal(got.body.tracks.length, 1);
   assert.equal((await req("/api/spotify/connect")).status, 501);
 });
+
+test("rate limit: 429 from Discogs honors Retry-After, coalesces duplicates, serves stale when it can", async () => {
+  const realFetch = globalThis.fetch;
+  let searchCalls = 0;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("/database/search")) {
+      searchCalls++;
+      return new Response("{}", { status: 429, headers: { "Retry-After": "7" } });
+    }
+    return realFetch(url);
+  };
+  try {
+    // Uncached search: fails fast with a wait the client can act on.
+    const a = await req("/api/search?label=Nu+Groove");
+    assert.equal(a.status, 429);
+    assert.equal(a.headers.get("retry-after"), "7");
+    assert.equal((await a.json()).retryAfter, 7);
+    // The worker is now backing off: the same search costs no Discogs call…
+    const b = await req("/api/search?label=Nu+Groove");
+    assert.equal(b.status, 429); assert.equal(searchCalls, 1);
+    // …but a previously cached search still answers from the cache.
+    const c = await req("/api/search?style=Deep+House&decade=1990s");
+    assert.equal(c.status, 200);
+  } finally { globalThis.fetch = realFetch; }
+});

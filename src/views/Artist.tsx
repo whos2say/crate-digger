@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, type ArtistDetail, type Record, type Track } from "../api";
+import { api, retryDelayMs, type ArtistDetail, type Record, type Track } from "../api";
 import { useShell } from "../App";
 import CoverGrid from "../components/CoverGrid";
 
@@ -11,9 +11,11 @@ export default function Artist() {
   const [error, setError] = useState<string | null>(null);
   const [keyTracks, setKeyTracks] = useState<{ title: string; record: Record; track: Track }[]>([]);
   const [collecting, setCollecting] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     setArtist(null); setError(null); setKeyTracks([]);
+    let timer: number | undefined;
     api.artist(Number(id)).then(async (a) => {
       setArtist(a);
       // Key tracks: the openers of the first records, read from the sleeve backs (cached server-side).
@@ -26,8 +28,13 @@ export default function Artist() {
         } catch { /* skip */ }
         setKeyTracks(picks.slice());
       }
-    }).catch((e) => setError(e.message));
-  }, [id]);
+    }).catch((e) => {
+      const delay = retryDelayMs(e);
+      if (delay && attempt < 3) { setError(`Discogs is busy. Trying again in ${Math.ceil(delay / 1000)}s…`); timer = window.setTimeout(() => setAttempt((n) => n + 1), delay); }
+      else setError(e.message);
+    });
+    return () => { if (timer) window.clearTimeout(timer); };
+  }, [id, attempt]);
 
   const addAll = async () => {
     if (!artist) return;
