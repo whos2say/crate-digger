@@ -55,16 +55,25 @@ export default {
         // Temporary: probe Spotify with different query shapes so we can see what its search endpoint accepts right now.
         const token = await catalog.appTokenForDebug(db, env);
         const urls = [
-          `/search?q=genre%3Adisney&type=track&limit=20&offset=0&market=US`,
-          `/search?q=genre%3Adisney&type=track&limit=20&market=US`,
-          `/search?q=genre%3Adisney&type=track&limit=20`,
-          `/search?q=genre%3Adisney&type=track`,
-          `/search?q=disney&type=track&limit=20`,
-          `/search?q=disney&type=album&limit=20`,
+          // find the real limit ceiling
           `/search?q=disney&type=track&limit=1`,
-          `/search?q=disney&type=track&limit=50`,
-          `/search?q=year%3A1990-1999+genre%3Adisney&type=track&limit=20`,
-          `/browse/categories?limit=20`,
+          `/search?q=disney&type=track&limit=5`,
+          `/search?q=disney&type=track&limit=10`,
+          `/search?q=disney&type=track&limit=15`,
+          `/search?q=disney&type=track&limit=20`,
+          // which genre tags does Spotify actually accept for our crates?
+          `/search?q=genre%3A%22classic+rock%22&type=track&limit=1`,
+          `/search?q=genre%3Abroadway&type=track&limit=1`,
+          `/search?q=genre%3A%22show+tunes%22&type=track&limit=1`,
+          `/search?q=genre%3A%22deep+house%22&type=track&limit=1`,
+          `/search?q=genre%3Adisco&type=track&limit=1`,
+          `/search?q=genre%3Atechno&type=track&limit=1`,
+          `/search?q=genre%3Ajazz&type=track&limit=1`,
+          `/search?q=genre%3Apop&type=track&limit=1`,
+          // and does plain-text search for the same queries actually return records?
+          `/search?q=%22classic+rock%22&type=track&limit=1`,
+          `/search?q=broadway+musical&type=track&limit=1`,
+          `/search?q=disney+soundtrack&type=track&limit=1`,
         ];
         const results = [] as { url: string; status: number; msg?: string; total?: number }[];
         for (const u of urls) {
