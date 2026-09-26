@@ -21,7 +21,7 @@ const IMG300 = "https://i.scdn.co/image/abc300";
 const images = [{ url: IMG, width: 640, height: 640 }, { url: IMG300, width: 300, height: 300 }];
 const artistLite = { id: "art1", name: "Loose Ends", external_urls: { spotify: "https://open.spotify.com/artist/art1" } };
 const album = (id, name, y, extra = {}) => ({ id, name, album_type: "album", release_date: `${y}-01-01`, images, artists: [artistLite], external_urls: { spotify: `https://open.spotify.com/album/${id}` }, ...extra });
-const track = (id, name, n, dur = 372000) => ({ id, uri: `spotify:track:${id}`, name, duration_ms: dur, track_number: n, artists: [artistLite], external_urls: { spotify: `https://open.spotify.com/track/${id}` }, album: { name: "Blue Moon" } });
+const track = (id, name, n, dur = 372000, alb) => ({ id, uri: `spotify:track:${id}`, name, duration_ms: dur, track_number: n, artists: [artistLite], external_urls: { spotify: `https://open.spotify.com/track/${id}` }, album: alb ?? { name: "Blue Moon" } });
 
 const calls = { spotify: 0, discogs: 0, tokenGrants: [], playlists: [], added: {}, replaced: {} };
 globalThis.fetch = async (url, init = {}) => {
@@ -43,9 +43,15 @@ globalThis.fetch = async (url, init = {}) => {
       const q = new URL(u).searchParams.get("q");
       const types = new URL(u).searchParams.get("type");
       const out = {};
-      if (types.includes("album")) out.albums = { total: 2, items: /deep house|loose|blue moon|nu groove|genre:"soul"/i.test(q) ? [album("alb1", "Blue Moon", 1994, { label: "Nu Groove" }), album("alb1b", "Blue Moon (Remastered)", 2010), album("alb2", "No Art", 1990, { images: [] })] : [] };
+      if (types.includes("album")) { assert.ok(!/genre:/.test(q), "genre: must never be sent on an album search"); out.albums = { total: 2, items: /loose|blue moon|nu groove/i.test(q) ? [album("alb1", "Blue Moon", 1994, { label: "Nu Groove" }), album("alb1b", "Blue Moon (Remastered)", 2010), album("alb2", "No Art", 1990, { images: [] })] : [] }; }
       if (types.includes("artist")) out.artists = { items: [{ ...artistLite, images, genres: ["deep house", "uk street soul"], followers: { total: 12345 } }, { id: "art9", name: "No Photo", images: [], genres: [] }] };
-      if (types.includes("track")) out.tracks = { items: /blue moon/i.test(q) ? [track("t1", "Blue Moon - Original Mix", 1), { ...track("t9", "Blue Moon", 1, 180000), artists: [{ id: "e", name: "Elvis Presley" }] }] : [] };
+      if (types.includes("track")) {
+        assert.ok(!types.includes("album"), "genre: must never be sent on an album search");
+        const genreCrate = /genre:/.test(q) && /deep house|classic rock|broadway|soul/i.test(q);
+        out.tracks = { total: 2, items: genreCrate
+          ? [track("t1", "Blue Moon - Original Mix", 1, 372000, album("alb1", "Blue Moon", 1994, { label: "Nu Groove" })), track("t2", "Dub", 2, 300000, album("alb1", "Blue Moon", 1994)), track("t3", "Later Song", 1, 200000, album("alb3", "Later", 1998)), track("t4", "Nowhere", 1, 100000, album("alb2", "No Art", 1990, { images: [] }))]
+          : /blue moon/i.test(q) ? [track("t1", "Blue Moon - Original Mix", 1), { ...track("t9", "Blue Moon", 1, 180000), artists: [{ id: "e", name: "Elvis Presley" }] }] : [] };
+      }
       return Response.json(out);
     }
     if (path === "/artists/art1") return Response.json({ ...artistLite, images, genres: ["deep house"], followers: { total: 12345 }, popularity: 40 });
@@ -91,9 +97,9 @@ test("catalogue: crates and search come from Spotify with an app token; artists 
   const crate = await j(await req("/api/crates/deep-house-90s"));
   assert.equal(crate.status, 200);
   assert.equal(crate.body.label, "Deep house, nineties");
-  // duplicates (remaster) and cover-less albums are dropped
-  assert.deepEqual(crate.body.records.map((r) => r.id), ["sp:album:alb1"]);
-  assert.equal(crate.body.records[0].cover, IMG); assert.equal(crate.body.records[0].thumb, IMG300); assert.equal(crate.body.records[0].year, 1994); assert.equal(crate.body.records[0].label, "Nu Groove"); assert.equal(crate.body.records[0].artistId, "art1");
+  // built from the tracks' albums: duplicates collapse, cover-less albums are dropped
+  assert.deepEqual(crate.body.records.map((r) => r.id), ["sp:album:alb1", "sp:album:alb3"]);
+  assert.equal(crate.body.records[0].cover, IMG); assert.equal(crate.body.records[0].thumb, IMG300); assert.equal(crate.body.records[0].year, 1994); assert.equal(crate.body.records[0].artistId, "art1");
   assert.equal(calls.tokenGrants[0], "client_credentials");
   const s = await j(await req("/api/search?q=loose+ends"));
   assert.equal(s.body.artists.length, 1); assert.equal(s.body.artists[0].name, "Loose Ends"); assert.equal(s.body.artists[0].thumb, IMG300);
@@ -111,6 +117,10 @@ test("catalogue: crates and search come from Spotify with an app token; artists 
     const d = await j(await req("/api/search?decade=1960s"));
     assert.equal(d.status, 200);
     assert.ok(seen.length >= 5); assert.ok(seen.every((x) => /genre:"[^"]+" year:1960-1969/.test(x)));
+    // a genre chip on its own goes to track search too
+    seen.length = 0;
+    const g = await j(await req("/api/search?genre=Classic+Rock&decade=1970s"));
+    assert.equal(g.status, 200); assert.deepEqual(seen, ['genre:"classic rock" year:1970-1979']); assert.equal(g.body.records.length, 2);
   } finally { globalThis.fetch = realFetch; }
   assert.equal((await req("/api/crates/nope")).status, 404);
 });
