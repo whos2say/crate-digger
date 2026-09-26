@@ -76,7 +76,12 @@ export async function deleteTopTen(db: D1Like, id: string): Promise<void> {
 type PlaylistRow = { id: string; title: string; blurb: string; tracks: string; spotify_playlist_id: string | null; created_at: number; updated_at: number };
 
 function rowToPlaylist(r: PlaylistRow): Playlist {
-  return { id: r.id, title: r.title, blurb: r.blurb, tracks: JSON.parse(r.tracks), spotifyPlaylistId: r.spotify_playlist_id ?? undefined, createdAt: Number(r.created_at), updatedAt: Number(r.updated_at) };
+  const spotifyPlaylistId = r.spotify_playlist_id ?? undefined;
+  return {
+    id: r.id, title: r.title, blurb: r.blurb, tracks: JSON.parse(r.tracks), spotifyPlaylistId,
+    spotifyUrl: spotifyPlaylistId ? `https://open.spotify.com/playlist/${spotifyPlaylistId}` : undefined,
+    createdAt: Number(r.created_at), updatedAt: Number(r.updated_at),
+  };
 }
 
 function cleanTracks(tracks: unknown): PlaylistTrack[] {

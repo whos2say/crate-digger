@@ -1,5 +1,5 @@
-import type { ArtistDetail, Crate, Playlist, Record, RecordDetail, Status, TopTen } from "../server/types";
-export type { ArtistDetail, Crate, Playlist, PlaylistTrack, Record, RecordDetail, Status, TopTen, Track } from "../server/types";
+import type { ArtistDetail, Crate, Playlist, Record, RecordDetail, SpotifyMatch, Status, TopTen } from "../server/types";
+export type { ArtistDetail, Crate, Playlist, PlaylistTrack, Record, RecordDetail, SpotifyMatch, Status, TopTen, Track } from "../server/types";
 
 const KEY_STORAGE = "crate:key";
 export function getOwnerKey(): string { try { return localStorage.getItem(KEY_STORAGE) ?? ""; } catch { return ""; } }
@@ -45,6 +45,15 @@ export const api = {
     return call<{ records: Record[]; page: number; pages: number }>(`/api/search?${qs}`);
   },
   record: (id: string) => call<RecordDetail>(`/api/records/${id}`),
+  spotifyConnectUrl: () => `/api/spotify/login${getOwnerKey() ? `?key=${encodeURIComponent(getOwnerKey())}` : ""}`,
+  spotifyDisconnect: () => call<{ ok: true }>("/api/spotify/disconnect", { method: "POST" }),
+  spotifyToken: () => call<{ accessToken: string; expiresAt: number; product?: string }>("/api/spotify/token"),
+  spotifyMatch: (q: { title: string; artist: string; album?: string; duration?: string }) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v) qs.set(k, v);
+    return call<{ match: SpotifyMatch | null }>(`/api/spotify/match?${qs}`).then((r) => r.match);
+  },
+  exportPlaylist: (id: string) => call<{ playlist: Playlist; url: string; matched: number; missed: { title: string; artist: string }[] }>(`/api/playlists/${id}/export`, { method: "POST" }),
   artist: (id: number) => call<ArtistDetail>(`/api/artists/${id}`),
   topTens: () => call<{ lists: TopTen[] }>("/api/toptens").then((r) => r.lists),
   topTen: (id: string) => call<TopTen>(`/api/toptens/${id}`),

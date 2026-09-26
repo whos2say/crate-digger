@@ -101,7 +101,7 @@ test("playlists CRUD with notes", async () => {
   assert.equal(p.status, 201); assert.equal(p.body.tracks[0].note, "long intro");
   const got = await j(await req(`/api/playlists/${p.body.id}`));
   assert.equal(got.body.tracks.length, 1);
-  assert.equal((await req("/api/spotify/connect")).status, 501);
+  assert.equal((await req("/api/spotify/connect")).status, 404); // no such route; the connect link is /api/spotify/login
 });
 
 test("rate limit: 429 from Discogs honors Retry-After, coalesces duplicates, serves stale when it can", async () => {
@@ -127,5 +127,111 @@ test("rate limit: 429 from Discogs honors Retry-After, coalesces duplicates, ser
     // …but a previously cached search still answers from the cache.
     const c = await req("/api/search?style=Deep+House&decade=1990s");
     assert.equal(c.status, 200);
+  } finally { globalThis.fetch = realFetch; }
+});
+
+// ---------- Spotify (phase 2) ----------
+const spEnv = { ...env, SPOTIFY_CLIENT_ID: "cid", SPOTIFY_CLIENT_SECRET: "sec", APP_ORIGIN: "https://crate.test" };
+const spReq = (path, init = {}) => worker.fetch(new Request("https://crate.test" + path, init), spEnv);
+const spotifyState = { tokenGrants: [], playlists: [], added: {}, replaced: {} };
+
+function fakeSpotify(realFetch) {
+  return async (url, init = {}) => {
+    const u = String(url);
+    const body = init.body ? String(init.body) : "";
+    if (u === "https://accounts.spotify.com/api/token") {
+      const p = new URLSearchParams(body);
+      spotifyState.tokenGrants.push(p.get("grant_type"));
+      assert.match(init.headers.Authorization, /^Basic /);
+      if (p.get("grant_type") === "authorization_code") { assert.equal(p.get("code"), "CODE1"); assert.ok(p.get("code_verifier")); }
+      return Response.json({ access_token: "AT-" + spotifyState.tokenGrants.length, refresh_token: "RT", expires_in: 3600, scope: "streaming" });
+    }
+    if (u.startsWith("https://api.spotify.com/v1/")) {
+      assert.match(init.headers.Authorization, /^Bearer AT-/);
+      if (u.endsWith("/me")) return Response.json({ id: "brendan", display_name: "DJ Brendan", product: "premium", external_urls: { spotify: "https://open.spotify.com/user/brendan" } });
+      if (u.includes("/search?")) {
+        const q = new URL(u).searchParams.get("q");
+        const items = /blue moon/i.test(q) ? [
+          { id: "t1", uri: "spotify:track:t1", name: "Blue Moon - Original Mix", duration_ms: 372000, preview_url: "https://p.scdn.co/mp3-preview/t1", artists: [{ name: "Loose Ends" }], album: { name: "Blue Moon" }, external_urls: { spotify: "https://open.spotify.com/track/t1" } },
+          { id: "t9", uri: "spotify:track:t9", name: "Blue Moon", duration_ms: 180000, preview_url: null, artists: [{ name: "Elvis Presley" }], album: { name: "Sun Sessions" }, external_urls: { spotify: "https://open.spotify.com/track/t9" } },
+        ] : [];
+        return Response.json({ tracks: { items } });
+      }
+      const m = u.match(/\/users\/([^/]+)\/playlists$/);
+      if (m && init.method === "POST") { const id = "pl" + (spotifyState.playlists.length + 1); spotifyState.playlists.push({ id, user: m[1], ...JSON.parse(body) }); return Response.json({ id, external_urls: { spotify: "https://open.spotify.com/playlist/" + id } }); }
+      const t = u.match(/\/playlists\/([^/]+)\/tracks$/);
+      if (t && init.method === "POST") { (spotifyState.added[t[1]] ??= []).push(...JSON.parse(body).uris); return Response.json({ snapshot_id: "s" }); }
+      if (t && init.method === "PUT") { spotifyState.replaced[t[1]] = JSON.parse(body).uris; return Response.json({ snapshot_id: "s" }); }
+      if (u.match(/\/playlists\/[^/]+$/) && init.method === "PUT") return new Response(null, { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+}
+
+test("spotify: status reports configured; login redirects with PKCE + state; callback stores the account", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeSpotify(realFetch);
+  try {
+    const before = (await j(await spReq("/api/status"))).body.spotify;
+    assert.deepEqual(before, { configured: true, connected: false });
+    // Unconfigured Space says so.
+    assert.equal((await req("/api/spotify/login?key=sesame")).status, 501);
+    // Owner key travels as ?key= on this browser navigation.
+    assert.equal((await spReq("/api/spotify/login")).status, 401);
+    const login = await spReq("/api/spotify/login?key=sesame");
+    assert.equal(login.status, 302);
+    const auth = new URL(login.headers.get("location"));
+    assert.equal(auth.origin + auth.pathname, "https://accounts.spotify.com/authorize");
+    assert.equal(auth.searchParams.get("client_id"), "cid");
+    assert.equal(auth.searchParams.get("redirect_uri"), "https://crate.test/api/spotify/callback");
+    assert.equal(auth.searchParams.get("code_challenge_method"), "S256");
+    const state = auth.searchParams.get("state"); assert.ok(state);
+    // Wrong state is refused; the real one exchanges the code and lands back on the crate.
+    const bad = await spReq("/api/spotify/callback?code=CODE1&state=nope");
+    assert.match(bad.headers.get("location"), /spotify=error/);
+    const cb = await spReq(`/api/spotify/callback?code=CODE1&state=${state}`);
+    assert.equal(cb.status, 302);
+    assert.equal(cb.headers.get("location"), "https://crate.test/?spotify=connected&as=DJ%20Brendan");
+    const after = (await j(await spReq("/api/status"))).body.spotify;
+    assert.equal(after.connected, true); assert.equal(after.user.name, "DJ Brendan"); assert.equal(after.user.product, "premium");
+    // The SDK token endpoint is owner-only.
+    assert.equal((await spReq("/api/spotify/token")).status, 401);
+    const tok = (await j(await spReq("/api/spotify/token", { headers: { "x-crate-key": "sesame" } }))).body;
+    assert.equal(tok.accessToken, "AT-1"); assert.equal(tok.product, "premium");
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test("spotify: match picks the right artist's track and caches; export builds a playlist and writes ids back", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeSpotify(realFetch);
+  try {
+    const m = (await j(await spReq("/api/spotify/match?title=Blue+Moon+(Original)&artist=Loose+Ends+(2)&album=Blue+Moon&duration=6:12"))).body.match;
+    assert.equal(m.uri, "spotify:track:t1"); assert.equal(m.previewUrl, "https://p.scdn.co/mp3-preview/t1"); assert.ok(m.confidence >= 0.7);
+    const none = (await j(await spReq("/api/spotify/match?title=Nothing+Here&artist=Nobody"))).body.match;
+    assert.equal(none, null);
+    // Export: one matched track, one that Spotify has never heard of.
+    const auth = { "x-crate-key": "sesame", "Content-Type": "application/json" };
+    const rec = (await j(await spReq("/api/records/dg:m:100"))).body;
+    const p = (await j(await spReq("/api/playlists", { method: "POST", headers: auth, body: JSON.stringify({ title: "Blue hour", blurb: "late", tracks: [
+      { record: rec, track: rec.tracks[0], note: "" },
+      { record: { ...rec, artist: "Nobody" }, track: { position: "B2", title: "Nothing Here" }, note: "" },
+    ] }) }))).body;
+    assert.equal((await spReq(`/api/playlists/${p.id}/export`, { method: "POST" })).status, 401);
+    const ex = (await j(await spReq(`/api/playlists/${p.id}/export`, { method: "POST", headers: auth }))).body;
+    assert.equal(ex.matched, 1); assert.deepEqual(ex.missed, [{ title: "Nothing Here", artist: "Nobody" }]);
+    assert.equal(ex.url, "https://open.spotify.com/playlist/pl1");
+    assert.equal(spotifyState.playlists[0].user, "brendan"); assert.equal(spotifyState.playlists[0].name, "Blue hour"); assert.equal(spotifyState.playlists[0].public, false);
+    assert.deepEqual(spotifyState.added.pl1, ["spotify:track:t1"]);
+    // Written back: playlist id + url, and the matched uri on the track itself.
+    const saved = (await j(await spReq(`/api/playlists/${p.id}`))).body;
+    assert.equal(saved.spotifyPlaylistId, "pl1"); assert.equal(saved.spotifyUrl, "https://open.spotify.com/playlist/pl1");
+    assert.equal(saved.tracks[0].track.spotifyUri, "spotify:track:t1");
+    // Second export updates in place instead of creating another playlist.
+    await spReq(`/api/playlists/${p.id}/export`, { method: "POST", headers: auth });
+    assert.equal(spotifyState.playlists.length, 1); assert.deepEqual(spotifyState.replaced.pl1, ["spotify:track:t1"]);
+    // Disconnect clears the account.
+    assert.equal((await spReq("/api/spotify/disconnect", { method: "POST", headers: auth })).status, 200);
+    assert.equal((await j(await spReq("/api/status"))).body.spotify.connected, false);
+    assert.equal((await spReq("/api/spotify/token", { headers: auth })).status, 401);
   } finally { globalThis.fetch = realFetch; }
 });

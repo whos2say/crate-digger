@@ -1,14 +1,15 @@
 // Owner gate. Spacefast's Functions proxy drops Set-Cookie, so the key travels in a header.
-// Phase 2 swaps this for Spotify-connected identity; the check stays in one place.
+// Browser navigations (the Spotify connect link) cannot set a header, so the key may also ride
+// in a `key` query parameter on those routes only.
 
 export function ownerKeySet(env: Record<string, unknown>): boolean {
   return typeof env.OWNER_KEY === "string" && env.OWNER_KEY.length > 0;
 }
 
-export function isOwner(request: Request, env: Record<string, unknown>): boolean {
+export function isOwner(request: Request, env: Record<string, unknown>, allowQuery = false): boolean {
   const expected = env.OWNER_KEY;
   if (typeof expected !== "string" || expected.length === 0) return true; // unlocked until a key is set
-  const given = request.headers.get("x-crate-key") ?? "";
+  const given = request.headers.get("x-crate-key") ?? (allowQuery ? new URL(request.url).searchParams.get("key") : null) ?? "";
   return timingSafeEqual(given, expected);
 }
 

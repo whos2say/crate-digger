@@ -47,7 +47,8 @@ Spaces only reach a trusted host list).
 | --- | --- |
 | `DISCOGS_TOKEN` | Free personal token (discogs.com → Settings → Developers). Discogs only opens `/database/search` to authenticated apps, so genre / era / label / search browsing needs it. Release, master and artist lookups, the starter crate, and all Top Ten and set features work without it. |
 | `OWNER_KEY` | Passphrase Brendan enters once in the app (top-right). Required for creating and editing lists. Until it is set, writes are open — fine for a first look, not for a public URL. |
-| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `APP_ORIGIN` | Phase 2. |
+| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | From an app at developer.spotify.com. Add `<APP_ORIGIN>/api/spotify/callback` as a redirect URI on that app. |
+| `APP_ORIGIN` | The public origin, e.g. `https://crate-digger.view.fast`, used for the Spotify redirect. Defaults to the request origin. |
 
 ## Local development
 
@@ -73,16 +74,28 @@ npm test                                            # builds must exist: npm run
 - Spacefast's Functions proxy drops `Set-Cookie`, so the owner key travels as an
   `x-crate-key` header; the browser keeps it in localStorage.
 
-## Phase 2: Spotify
+## Spotify
 
-Planned shape, so the seams are already in place:
-- `GET /api/spotify/login` → Spotify authorize URL (PKCE + server secret), `GET /api/spotify/callback`
-  stores tokens in the `kv` table under `spotify:tokens`.
-- Records gain `source: "spotify"` and `spotifyUri` per track; the record sheet shows
-  "via Spotify" and uses 30-second previews, or the Web Playback SDK for Premium.
-- "Export to Spotify" on a set creates a real playlist and writes back `spotifyPlaylistId`.
-- Identity: once Spotify is connected, the owner check can key off the connected account
-  instead of `OWNER_KEY`.
+One account (Brendan's) is connected once and lives in the `kv` table; nothing Spotify-related
+reaches the browser except a short-lived access token for the Web Playback SDK, and only when the
+owner key is set in that browser.
+
+- **Connect:** top-right → *Connect Spotify* (needs the owner key; it rides as `?key=` because
+  that is a browser navigation). `GET /api/spotify/login` sends you to Spotify's consent screen
+  (authorization code + PKCE, with the server secret), `GET /api/spotify/callback` stores tokens
+  under `spotify:tokens` and returns you to the crate. Tokens refresh themselves.
+- **Previews:** opening a record with Spotify connected matches each track
+  (`GET /api/spotify/match?title&artist&album&duration`, cached a month) and lights up its play
+  button. Free accounts get the 30-second preview; a Premium account plays the full track through
+  the Web Playback SDK. Tracks with no Spotify match fall back to the YouTube video Discogs lists.
+  Matched tracks show a green *via Spotify* tag and carry `spotifyUri` / `previewUrl`.
+- **Export:** on a set, *Export to Spotify* (`POST /api/playlists/:id/export`) creates a private
+  playlist on the connected account and writes `spotifyPlaylistId` back; re-exporting updates that
+  playlist in place. Tracks Spotify does not have are listed rather than silently dropped.
+- **Disconnect:** `POST /api/spotify/disconnect` (owner only) forgets the account.
+
+Identity still keys off `OWNER_KEY`; tying it to the connected Spotify account would need a
+session the Functions proxy cannot carry (it drops `Set-Cookie`).
 
 ## Deferred on purpose
 

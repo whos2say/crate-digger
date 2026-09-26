@@ -223,3 +223,12 @@ img { max-width: 100%; }
   .setlist li { grid-template-columns: 22px 48px 1fr; }
   .setlist li .right { grid-column: 1 / -1; display: flex; gap: 12px; }
 }
+
+/* Spotify */
+.tracks .sp-tag { display: inline-block; margin-left: 6px; font-size: 10px; letter-spacing: 0.02em; color: #1db954; opacity: 0.85; vertical-align: middle; }
+.player audio { flex: none; }
+.player .sp-dot { width: 10px; height: 10px; border-radius: 50%; background: #1db954; flex: none; box-shadow: 0 0 0 0 rgba(29, 185, 84, 0.6); animation: sp-pulse 1.4s ease-out infinite; }
+@keyframes sp-pulse { to { box-shadow: 0 0 0 10px rgba(29, 185, 84, 0); } }
+.bar .status .sp-user { color: var(--ink); }
+.export-result { font-size: 13px; color: var(--dim); margin: 0 0 14px; }
+.export-result a { color: inherit; }

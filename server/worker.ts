@@ -1,10 +1,11 @@
 // The one worker behind /api/* and /s/*. Everything else is a static file served by Spacefast.
 
 import { isOwner, ownerKeySet } from "./auth";
-import { ensureSchema, kvGet, type D1Like } from "./db";
+import { ensureSchema, type D1Like } from "./db";
 import * as dg from "./discogs";
 import * as lists from "./lists";
 import { renderShare } from "./share";
+import * as sp from "./spotify";
 import type { Status } from "./types";
 
 export interface Env { DB?: D1Like; DISCOGS_TOKEN?: string; OWNER_KEY?: string; SPOTIFY_CLIENT_ID?: string; SPOTIFY_CLIENT_SECRET?: string; APP_ORIGIN?: string; [k: string]: unknown }
@@ -41,7 +42,7 @@ export default {
       if (path === "/api/status") {
         const status: Status = {
           discogs: { token: !!ctx.token, cache: db ? await dg.cacheSize(db).catch(() => 0) : 0 },
-          spotify: { configured: !!(env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET), connected: db ? !!(await kvGet(db, "spotify:tokens").catch(() => null)) : false },
+          spotify: { configured: sp.configured(env), ...(await sp.connection(db)) },
           ownerKeySet: ownerKeySet(env),
           unlocked: isOwner(request, env),
         };
@@ -94,6 +95,18 @@ export default {
         if (request.method === "DELETE") { await lists.deleteTopTen(db!, m[1]); return json({ ok: true }); }
       }
 
+      // ---- export a set to Spotify ----
+      m = path.match(/^\/api\/playlists\/([\w-]+)\/export$/);
+      if (m && request.method === "POST") {
+        const e = needsDb(); if (e) return e;
+        const g = guard(); if (g) return g;
+        const list = await lists.getPlaylist(db!, m[1]);
+        if (!list) return err("Not found", 404);
+        const result = await sp.exportPlaylist(db!, env, list);
+        const saved = await lists.updatePlaylist(db!, list.id, { spotifyPlaylistId: result.playlistId, tracks: result.tracks });
+        return json({ playlist: saved, url: result.url, matched: result.matched, missed: result.missed });
+      }
+
       // ---- playlists ----
       if (path === "/api/playlists") {
         const e = needsDb(); if (e) return e;
@@ -109,13 +122,44 @@ export default {
         if (request.method === "DELETE") { await lists.deletePlaylist(db!, m[1]); return json({ ok: true }); }
       }
 
-      // ---- spotify (phase 2) ----
+      // ---- spotify ----
       if (path.startsWith("/api/spotify/")) {
-        return err("Spotify is next: OAuth connect, previews, Web Playback and playlist export land in phase 2. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET when ready.", 501);
+        const e = needsDb(); if (e) return e;
+        const back = (q: string) => Response.redirect(`${typeof env.APP_ORIGIN === "string" && env.APP_ORIGIN ? env.APP_ORIGIN.replace(/\/+$/, "") : url.origin}/?${q}`, 302);
+        // Connect: a browser navigation, so the owner key may arrive as ?key=.
+        if (path === "/api/spotify/login") {
+          if (!isOwner(request, env, true)) return err("That key does not match the Space's OWNER_KEY.", 401);
+          return Response.redirect(await sp.loginUrl(db!, env, url.origin), 302);
+        }
+        if (path === "/api/spotify/callback") {
+          try { const t = await sp.handleCallback(db!, env, url.origin, url.searchParams); return back(`spotify=connected&as=${encodeURIComponent(t.user.name)}`); }
+          catch (e2) { return back(`spotify=error&why=${encodeURIComponent(e2 instanceof Error ? e2.message : "unknown")}`); }
+        }
+        if (path === "/api/spotify/disconnect" && request.method === "POST") {
+          const g = guard(); if (g) return g;
+          await sp.disconnect(db!);
+          return json({ ok: true });
+        }
+        // Access token for the Web Playback SDK (owner only; Premium plays full tracks in the browser).
+        if (path === "/api/spotify/token") {
+          const g = guard(); if (g) return g;
+          const t = await sp.accessToken(db!, env);
+          return json({ accessToken: t.accessToken, expiresAt: t.expiresAt, product: t.user.product, user: t.user });
+        }
+        // Match a Discogs track to a Spotify track: uri, preview, link. Public, cached a month.
+        if (path === "/api/spotify/match") {
+          const title = url.searchParams.get("title"), artist = url.searchParams.get("artist");
+          if (!title || !artist) return err("Need title and artist.", 400);
+          const match = await sp.matchTrack(db!, env, { title, artist, album: url.searchParams.get("album") ?? undefined, duration: url.searchParams.get("duration") ?? undefined });
+          return json({ match }, 200, CACHED);
+        }
+        return err("No such Spotify route.", 404);
       }
+
 
       return err("No such route.", 404);
     } catch (e) {
+      if (e instanceof sp.SpotifyError) return err(e.message, e.status);
       if (e instanceof dg.DiscogsError) {
         const extra: Record<string, string> = e.status === 429 ? { "Retry-After": String(Math.ceil((e.retryAfterMs ?? 8000) / 1000)) } : {};
         return json({ error: e.message, retryAfter: e.retryAfterMs ? Math.ceil(e.retryAfterMs / 1000) : undefined }, e.status, extra);

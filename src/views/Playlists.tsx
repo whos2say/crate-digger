@@ -22,7 +22,7 @@ export function Playlists() {
   return (
     <div className="page">
       <div className="page-head">
-        <div><h1>Sets</h1><p>Working playlists with track-level control: order, cut, and a note on how each one comes in. Spotify export lands with the Spotify connection in phase 2.</p></div>
+        <div><h1>Sets</h1><p>Working playlists with track-level control: order, cut, and a note on how each one comes in. Export a set to Spotify as a real playlist once Spotify is connected.</p></div>
         <button className="btn primary" onClick={create}>New set</button>
       </div>
       {lists === null && <p className="saved">Loading…</p>}
@@ -46,7 +46,23 @@ export function PlaylistEditor() {
   const { toast, open, unlock, status } = useShell();
   const [list, setList] = useState<Playlist | null>(null);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty" | "error">("saved");
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<{ url: string; matched: number; missed: { title: string; artist: string }[] } | null>(null);
   const timer = useRef<number | null>(null);
+
+  const exportToSpotify = async () => {
+    if (!list) return;
+    if (status && !status.unlocked) { unlock(); return; }
+    if (saveState === "dirty" || saveState === "saving") { toast("Wait for the set to save first"); return; }
+    setExporting(true);
+    try {
+      const r = await api.exportPlaylist(list.id);
+      setList(r.playlist);
+      setExportNote({ url: r.url, matched: r.matched, missed: r.missed });
+      toast(r.missed.length ? `${r.matched} of ${list.tracks.length} tracks on Spotify` : "Set is on Spotify");
+    } catch (e) { toast(e instanceof Error ? e.message : "Export failed"); if (e instanceof ApiError && e.status === 401) unlock(); }
+    finally { setExporting(false); }
+  };
 
   useEffect(() => { api.playlist(id!).then(setList).catch((e) => toast(e.message)); }, [id, toast]);
 
@@ -88,11 +104,21 @@ export function PlaylistEditor() {
         </div>
         <div className="tools">
           <span className="saved">{saveState === "saving" ? "Saving…" : saveState === "dirty" ? "Unsaved" : saveState === "error" ? "Not saved" : "Saved"}{total ? ` · ${Math.round(total / 60)} min` : ""}</span>
-          <button className="btn" disabled title={status?.spotify.connected ? "" : "Connect Spotify in phase 2 to export"}>Export to Spotify</button>
+          {list.spotifyUrl && <a className="btn quiet" href={list.spotifyUrl} target="_blank" rel="noopener">Open in Spotify</a>}
+          <button className="btn" disabled={!status?.spotify.connected || exporting || !list.tracks.length} onClick={exportToSpotify}
+            title={status?.spotify.connected ? (list.spotifyPlaylistId ? "Update the Spotify playlist to match this set" : "Create a Spotify playlist from this set") : "Connect Spotify (top-right) to export"}>
+            {exporting ? "Exporting…" : list.spotifyPlaylistId ? "Re-export to Spotify" : "Export to Spotify"}
+          </button>
           <button className="btn quiet danger" onClick={remove}>Delete</button>
         </div>
       </div>
       <p className="hint">Drag the handle to reorder. The yellow line under each track is your intro note: how it comes in, what to watch for.</p>
+      {exportNote && (
+        <p className="export-result">
+          {exportNote.matched} track{exportNote.matched === 1 ? "" : "s"} matched · <a href={exportNote.url} target="_blank" rel="noopener">open the playlist</a>
+          {exportNote.missed.length > 0 && <> · not found on Spotify: {exportNote.missed.map((m) => `${m.artist} — ${m.title}`).join("; ")}</>}
+        </p>
+      )}
       {!list.tracks.length && <div className="empty"><h2>Empty set</h2><p>Open a cover in the crate and press “+ set” next to a track.</p></div>}
       <ol className="setlist" ref={(el) => { containerRef.current = el; }}>
         {list.tracks.map((t, i) => (
@@ -101,7 +127,7 @@ export function PlaylistEditor() {
             <button className="art" onClick={() => open(t.record, list.tracks.map((x) => x.record))} aria-label={t.record.title}><img src={t.record.thumb} alt="" /></button>
             <div className="t">
               <strong>{t.track.title}</strong>
-              <span>{t.record.artist} — {t.record.title}{t.record.year ? `, ${t.record.year}` : ""}{t.track.duration ? ` · ${t.track.duration}` : ""} · via {t.record.source === "discogs" ? "Discogs" : "Spotify"}</span>
+              <span>{t.record.artist} — {t.record.title}{t.record.year ? `, ${t.record.year}` : ""}{t.track.duration ? ` · ${t.track.duration}` : ""} · via {t.record.source === "discogs" ? "Discogs" : "Spotify"}{t.track.spotifyUri && <> · <a href={t.track.spotifyUrl} target="_blank" rel="noopener" style={{ color: "#1db954" }}>on Spotify</a></>}</span>
               <input className="note" value={t.note} placeholder="Intro note" onChange={(e) => setNote(i, e.target.value)} />
             </div>
             <div className="right" style={{ display: "flex", gap: 12, alignItems: "center" }}>

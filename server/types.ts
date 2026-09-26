@@ -27,7 +27,24 @@ export interface Track {
   duration?: string;
   /** YouTube video id when Discogs lists one that matches the track. */
   youtube?: string;
+  /** Spotify track matched to this one (filled lazily; see /api/spotify/match). */
   spotifyUri?: string;
+  spotifyUrl?: string;
+  /** 30-second MP3 preview from Spotify, when the catalogue has one. */
+  previewUrl?: string;
+}
+
+export interface SpotifyMatch {
+  uri: string;
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  durationMs: number;
+  previewUrl?: string;
+  url: string;
+  /** 0–1: how sure the matcher is. Below ~0.7 is worth a glance. */
+  confidence: number;
 }
 
 export interface RecordDetail extends Record {
@@ -69,6 +86,7 @@ export interface Playlist {
   blurb: string;
   tracks: PlaylistTrack[];
   spotifyPlaylistId?: string;
+  spotifyUrl?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -81,7 +99,7 @@ export interface Crate {
 
 export interface Status {
   discogs: { token: boolean; cache: number };
-  spotify: { configured: boolean; connected: boolean };
+  spotify: { configured: boolean; connected: boolean; user?: { id: string; name: string; product?: string; url?: string } };
   ownerKeySet: boolean;
   unlocked: boolean;
 }

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { NavLink, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getOwnerKey, setOwnerKey, type Playlist, type Record, type Status, type TopTen, type Track } from "./api";
 import RecordSheet from "./components/RecordSheet";
 import Picker from "./components/Picker";
@@ -37,6 +37,29 @@ export default function App() {
   useEffect(refreshStatus, [refreshStatus]);
 
   const toast = useCallback((m: string) => { setMsg(m); window.setTimeout(() => setMsg((cur) => (cur === m ? null : cur)), 2400); }, []);
+
+  // Back from Spotify's consent screen: /?spotify=connected&as=Name or /?spotify=error&why=…
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const outcome = params.get("spotify");
+    if (!outcome) return;
+    if (outcome === "connected") toast(`Spotify connected${params.get("as") ? ` as ${params.get("as")}` : ""}`);
+    else toast(`Spotify: ${params.get("why") ?? "could not connect"}`);
+    const next = new URLSearchParams(params); next.delete("spotify"); next.delete("as"); next.delete("why");
+    setParams(next, { replace: true });
+    refreshStatus();
+  }, [params, setParams, toast, refreshStatus]);
+
+  const connectSpotify = useCallback(() => {
+    if (status && !status.unlocked) { toast("Unlock the crate first"); unlock(); return; }
+    window.location.href = api.spotifyConnectUrl();
+  }, [status, toast]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const disconnectSpotify = useCallback(async () => {
+    if (!window.confirm("Disconnect Spotify? Previews and export stop until you connect again.")) return;
+    try { await api.spotifyDisconnect(); toast("Spotify disconnected"); refreshStatus(); }
+    catch (e) { toast(e instanceof Error ? e.message : "Could not disconnect"); }
+  }, [toast, refreshStatus]);
 
   const unlock = useCallback(() => {
     const k = window.prompt("Enter the owner key for this crate (the OWNER_KEY set on the Space):", getOwnerKey());
@@ -80,7 +103,16 @@ export default function App() {
             {status && (
               <>
                 <span>Discogs <b>{status.discogs.token ? "on" : "no token"}</b></span>
-                <span>Spotify <b>{status.spotify.connected ? "connected" : status.spotify.configured ? "not connected" : "phase 2"}</b></span>
+                {status.spotify.connected ? (
+                  <span title={status.spotify.user?.product === "premium" ? "Premium: full tracks play in the crate" : "Free: 30-second previews"}>
+                    Spotify <b className="sp-user">{status.spotify.user?.name ?? "connected"}</b>
+                    {status.unlocked && <button className="btn quiet" style={{ marginLeft: 6 }} onClick={disconnectSpotify}>Disconnect</button>}
+                  </span>
+                ) : status.spotify.configured ? (
+                  <button className="btn quiet" onClick={connectSpotify} title="Connect the Spotify account that owns the exported playlists">Connect Spotify</button>
+                ) : (
+                  <span title="Set SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET and APP_ORIGIN on the Space">Spotify <b>not set up</b></span>
+                )}
                 <button className="btn quiet" onClick={unlock} title="Saving lists requires the owner key">
                   {status.unlocked ? (status.ownerKeySet ? "Unlocked" : "No key set") : "Locked"}
                 </button>

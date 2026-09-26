@@ -53,6 +53,10 @@ export async function kvSet(db: D1Like, k: string, v: string): Promise<void> {
   await db.prepare(`REPLACE INTO kv (k, v, updated_at) VALUES (?, ?, ?)`).bind(k, v, Date.now()).run();
 }
 
+export async function kvDel(db: D1Like, k: string): Promise<void> {
+  await db.prepare(`DELETE FROM kv WHERE k = ?`).bind(k).run();
+}
+
 export function newId(): string {
   const bytes = new Uint8Array(12);
   crypto.getRandomValues(bytes);
