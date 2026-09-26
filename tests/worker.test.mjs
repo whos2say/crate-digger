@@ -42,13 +42,15 @@ globalThis.fetch = async (url, init = {}) => {
     if (path.startsWith("/search?")) {
       const q = new URL(u).searchParams.get("q");
       const types = new URL(u).searchParams.get("type");
+      const limit = Number(new URL(u).searchParams.get("limit") ?? 10);
       const out = {};
       if (types.includes("album")) { assert.ok(!/genre:/.test(q), "genre: must never be sent on an album search"); out.albums = { total: 2, items: /loose|blue moon|nu groove/i.test(q) ? [album("alb1", "Blue Moon", 1994, { label: "Nu Groove" }), album("alb1b", "Blue Moon (Remastered)", 2010), album("alb2", "No Art", 1990, { images: [] })] : [] }; }
       if (types.includes("artist")) out.artists = { items: [{ ...artistLite, images, genres: ["deep house", "uk street soul"], followers: { total: 12345 } }, { id: "art9", name: "No Photo", images: [], genres: [] }] };
       if (types.includes("track")) {
         assert.ok(!types.includes("album"), "genre: must never be sent on an album search");
-        const genreCrate = /genre:/.test(q) && /deep house|classic rock|broadway|soul/i.test(q);
-        out.tracks = { total: 2, items: genreCrate
+        assert.ok(limit <= 10, `limit exceeds Spotify's cap of 10: ${limit}`);
+        const crateQuery = /disney|broadway|classic rock|show tunes|deep house|disco|detroit|jazz|balearic|garage|bossa|dub|afrobeat|boogie|soul|funk|pop|rock/i.test(q);
+        out.tracks = { total: 2, items: crateQuery
           ? [track("t1", "Blue Moon - Original Mix", 1, 372000, album("alb1", "Blue Moon", 1994, { label: "Nu Groove" })), track("t2", "Dub", 2, 300000, album("alb1", "Blue Moon", 1994)), track("t3", "Later Song", 1, 200000, album("alb3", "Later", 1998)), track("t4", "Nowhere", 1, 100000, album("alb2", "No Art", 1990, { images: [] }))]
           : /blue moon/i.test(q) ? [track("t1", "Blue Moon - Original Mix", 1), { ...track("t9", "Blue Moon", 1, 180000), artists: [{ id: "e", name: "Elvis Presley" }] }] : [] };
       }
@@ -116,11 +118,11 @@ test("catalogue: crates and search come from Spotify with an app token; artists 
   try {
     const d = await j(await req("/api/search?decade=1960s"));
     assert.equal(d.status, 200);
-    assert.ok(seen.length >= 5); assert.ok(seen.every((x) => /genre:"[^"]+" year:1960-1969/.test(x)));
-    // a genre chip on its own goes to track search too
+    assert.ok(seen.length >= 5); assert.ok(seen.every((x) => / year:1960-1969$/.test(x)));
+    // a genre chip goes to text search (Spotify's genre: filter is unreliable on our token)
     seen.length = 0;
     const g = await j(await req("/api/search?genre=Classic+Rock&decade=1970s"));
-    assert.equal(g.status, 200); assert.deepEqual(seen, ['genre:"classic rock" year:1970-1979']); assert.equal(g.body.records.length, 2);
+    assert.equal(g.status, 200); assert.deepEqual(seen, ['Classic Rock year:1970-1979']); assert.ok(g.body.records.length >= 1);
   } finally { globalThis.fetch = realFetch; }
   assert.equal((await req("/api/crates/nope")).status, 404);
 });

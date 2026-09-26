@@ -136,21 +136,25 @@ export function artistToCard(a: SpArtist): ArtistCard {
 
 // ---------- crates ----------
 
-export const CRATES: { key: string; label: string; q: string }[] = [
-  { key: "classic-rock", label: "Classic rock", q: `genre:"classic rock"` },
-  { key: "broadway", label: "Broadway musicals", q: `genre:broadway` },
-  { key: "disney", label: "Disney songs", q: `genre:disney` },
-  { key: "show-tunes", label: "Show tunes", q: `genre:"show tunes"` },
-  { key: "deep-house-90s", label: "Deep house, nineties", q: `genre:"deep house" year:1990-1999` },
-  { key: "disco", label: "Disco twelves", q: `genre:disco year:1976-1983` },
-  { key: "detroit", label: "Detroit", q: `genre:"detroit techno"` },
-  { key: "jazz-funk", label: "Jazz-funk", q: `genre:"jazz funk" year:1970-1979` },
-  { key: "balearic", label: "Balearic and ambient", q: `genre:balearic` },
-  { key: "uk-garage", label: "UK garage", q: `genre:"uk garage" year:1996-2002` },
-  { key: "bossa", label: "Bossa and MPB", q: `genre:"bossa nova" year:1960-1975` },
-  { key: "dub", label: "Dub", q: `genre:dub year:1972-1982` },
-  { key: "afrobeat", label: "Afrobeat", q: `genre:afrobeat` },
-  { key: "boogie", label: "Boogie", q: `genre:boogie year:1979-1986` },
+// Each crate is a small set of plain-text queries fetched in parallel and merged. Text search
+// returns more variety than Spotify's `genre:` filter, and covers crates like Disney that have
+// no genre tag at all. Keep three or four queries per crate: at limit=10 each that yields
+// 20-40 unique albums after dedup, which is plenty for a visual crate.
+export const CRATES: { key: string; label: string; queries: string[] }[] = [
+  { key: "classic-rock", label: "Classic rock", queries: [`"classic rock" hits`, `70s rock classics`, `80s rock hits`, `rock anthems`] },
+  { key: "broadway", label: "Broadway musicals", queries: [`broadway musical`, `broadway cast recording`, `broadway soundtrack`, `musical theatre broadway`] },
+  { key: "disney", label: "Disney songs", queries: [`disney soundtrack`, `disney classics`, `walt disney songs`, `disney animated`] },
+  { key: "show-tunes", label: "Show tunes", queries: [`show tunes`, `movie musical`, `broadway show tunes`, `musical theatre`] },
+  { key: "deep-house-90s", label: "Deep house, nineties", queries: [`"deep house" year:1990-1999`, `deep house classics`, `chicago deep house`, `new york deep house`] },
+  { key: "disco", label: "Disco twelves", queries: [`disco 12 inch`, `extended disco mix`, `disco long version`, `salsoul disco`] },
+  { key: "detroit", label: "Detroit", queries: [`detroit techno`, `detroit house`, `underground resistance`, `motor city techno`] },
+  { key: "jazz-funk", label: "Jazz-funk", queries: [`jazz funk`, `jazz-funk 70s`, `roy ayers jazz funk`, `crusaders jazz funk`] },
+  { key: "balearic", label: "Balearic and ambient", queries: [`balearic beat`, `ambient house`, `cafe del mar`, `chillout ibiza`] },
+  { key: "uk-garage", label: "UK garage", queries: [`uk garage`, `2-step garage`, `speed garage`, `garage house uk`] },
+  { key: "bossa", label: "Bossa and MPB", queries: [`bossa nova`, `mpb brasil`, `brazilian jazz`, `samba brasil`] },
+  { key: "dub", label: "Dub", queries: [`dub reggae`, `king tubby dub`, `jamaican dub`, `roots dub`] },
+  { key: "afrobeat", label: "Afrobeat", queries: [`afrobeat`, `fela kuti`, `afro funk`, `nigerian afrobeat`] },
+  { key: "boogie", label: "Boogie", queries: [`boogie funk`, `post-disco boogie`, `80s boogie`, `electro funk boogie`] },
 ];
 export const GENRES = ["Classic Rock", "Broadway", "Show Tunes", "Disney", "Soundtrack", "Rock", "Pop", "Soul", "Funk", "Disco", "Jazz", "Blues", "Country", "Reggae", "Hip Hop", "House", "Deep House", "Techno", "Ambient", "Bossa Nova"];
 export const DECADES = ["1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s"];
@@ -196,9 +200,11 @@ function dedupeAlbums(albums: SpAlbum[]): SpAlbum[] {
   return out;
 }
 
-const PAGE = 20;
-// Spotify's /search endpoint now rejects limit=50 with "Invalid limit"; the safe max here is 20.
-const TRACK_PAGE = 20;
+// Spotify's /search endpoint on a client-credentials token now caps limit at 10; anything above
+// returns 400 "Invalid limit". So crates fan out across several text queries in parallel and
+// merge, and paginated text search steps through offsets in chunks of 10.
+const PAGE = 10;
+const TRACK_PAGE = 10;
 
 // Spotify's `genre:` filter only applies to track and artist searches, never albums. So any
 // genre browse searches tracks and builds the crate from the albums those tracks sit on: one
@@ -219,11 +225,12 @@ async function trackSearch(db: D1Like | null, env: SpotifyEnv, q: string, page: 
 }
 
 // A bare decade browse (no genre, no text) fans out across broad genres and merges what comes back.
-const FANOUT_GENRES = ["classic rock", "broadway", "disney", "show tunes", "soul", "funk", "disco", "jazz", "pop", "rock"];
+const FANOUT_TERMS = ["classic rock", "broadway", "disney", "show tunes", "soul", "funk", "disco", "jazz", "pop", "rock"];
 
 async function fanOut(db: D1Like | null, env: SpotifyEnv, p: SearchParams): Promise<{ records: Record[]; artists: ArtistCard[]; page: number; pages: number }> {
-  const results = await Promise.all(FANOUT_GENRES.map(async (g) => {
-    try { return (await trackSearch(db, env, buildQuery({ ...p, genre: g }), 1, 30)).albums; } catch { return [] as SpAlbum[]; }
+  const results = await Promise.all(FANOUT_TERMS.map(async (term) => {
+    const q = p.year ? `${term} year:${p.year}` : term;
+    try { return (await trackSearch(db, env, q, 1)).albums; } catch { return [] as SpAlbum[]; }
   }));
   // Interleave so one genre does not dominate the top of the crate.
   const merged: SpAlbum[] = [];
@@ -238,8 +245,10 @@ export async function search(db: D1Like | null, env: SpotifyEnv, p: SearchParams
   if (!q) throw new SpotifyError("Give me something to dig for.", 400);
   const page = Math.max(1, p.page ?? 1);
   if (p.genre) {
-    // Genre (with optional text / year): track search, crate built from the tracks' albums.
-    const r = await trackSearch(db, env, q, page);
+    // Genre chip: run the genre as a text query (their `genre:` filter is unreliable and Disney/
+    // Show tunes have no tag). Text also returns more records.
+    const parts = [p.q, p.genre, p.year ? `year:${p.year}` : ""].filter(Boolean);
+    const r = await trackSearch(db, env, parts.join(" "), page);
     return { records: r.albums.map(albumToRecord), artists: [], page, pages: Math.max(1, Math.min(20, Math.ceil(r.total / TRACK_PAGE))) };
   }
   if (!p.q && !p.label) return fanOut(db, env, p);
@@ -264,7 +273,7 @@ async function albumSearch(db: D1Like | null, env: SpotifyEnv, q: string, page: 
   if (exactIdx > 0) artistItems.unshift(...artistItems.splice(exactIdx, 1));
   if (exactIdx >= 0 && page === 1) {
     try {
-      const own = await get<{ items: SpAlbum[] }>(db, env, `/artists/${artistItems[0].id}/albums?include_groups=album,single,compilation&market=${MARKET}&limit=50`);
+      const own = await get<{ items: SpAlbum[] }>(db, env, `/artists/${artistItems[0].id}/albums?include_groups=album,single,compilation&market=${MARKET}&limit=20`);
       const theirs = dedupeAlbums(own.items).sort((a, b) => (year(b) ?? 0) - (year(a) ?? 0));
       albums = dedupeAlbums([...theirs, ...albums]);
     } catch { /* fall back to the plain search */ }
@@ -274,11 +283,16 @@ async function albumSearch(db: D1Like | null, env: SpotifyEnv, q: string, page: 
   return { records: albums.map(albumToRecord), artists, page, pages: Math.max(1, Math.min(25, Math.ceil(total / PAGE))) };
 }
 
-export async function crate(db: D1Like | null, env: SpotifyEnv, key: string, page = 1): Promise<Crate & { pages: number }> {
+export async function crate(db: D1Like | null, env: SpotifyEnv, key: string, _page = 1): Promise<Crate & { pages: number }> {
   const def = CRATES.find((c) => c.key === key);
   if (!def) throw new SpotifyError("No such crate.", 404);
-  const r = await trackSearch(db, env, def.q, page);
-  return { key, label: def.label, records: r.albums.map(albumToRecord), pages: Math.max(1, Math.min(20, Math.ceil(r.total / TRACK_PAGE))) };
+  const results = await Promise.all(def.queries.map((q) => trackSearch(db, env, q, 1).then((r) => r.albums).catch(() => [] as SpAlbum[])));
+  // Interleave so no single query dominates the top of the crate.
+  const merged: SpAlbum[] = [];
+  for (let i = 0; i < TRACK_PAGE; i++) for (const arr of results) if (arr[i]) merged.push(arr[i]);
+  const albums = dedupeAlbums(merged);
+  if (!albums.length) throw new SpotifyError("Spotify returned nothing for that crate.", 404);
+  return { key, label: def.label, records: albums.map(albumToRecord), pages: 1 };
 }
 
 // ---------- artists ----------
@@ -287,7 +301,7 @@ export async function getArtist(db: D1Like | null, env: SpotifyEnv, id: string):
   const [artist, top, albums] = await Promise.all([
     get<SpArtist>(db, env, `/artists/${id}`),
     get<{ tracks: SpTrack[] }>(db, env, `/artists/${id}/top-tracks?market=${MARKET}`),
-    get<{ items: SpAlbum[] }>(db, env, `/artists/${id}/albums?include_groups=album,single,compilation&market=${MARKET}&limit=50`),
+    get<{ items: SpAlbum[] }>(db, env, `/artists/${id}/albums?include_groups=album,single,compilation&market=${MARKET}&limit=20`),
   ]);
   const records = dedupeAlbums(albums.items).sort((a, b) => (year(a) ?? 0) - (year(b) ?? 0)).map(albumToRecord);
   return {
@@ -318,4 +332,3 @@ export async function getRecord(db: D1Like | null, env: SpotifyEnv, id: string):
   };
 }
 
-export async function appTokenForDebug(db: D1Like | null, env: SpotifyEnv): Promise<string> { return appAccessToken(db, env); }
