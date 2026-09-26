@@ -82,6 +82,8 @@ export interface ArtistCard {
   genres: string[];
   followers?: number;
   url: string;
+  /** True when this artist's name is what was typed: shown large, their records lead the crate. */
+  exact?: boolean;
 }
 
 export interface ArtistDetail extends ArtistCard {

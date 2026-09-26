@@ -177,6 +177,10 @@ function buildQuery(p: SearchParams): string {
   return parts.join(" ");
 }
 
+function normalizeName(s: string): string {
+  return s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/^the\s+/, "").replace(/[^a-z0-9]+/g, " ").trim();
+}
+
 function dedupeAlbums(albums: SpAlbum[]): SpAlbum[] {
   const seen = new Set<string>();
   const out: SpAlbum[] = [];
@@ -216,8 +220,21 @@ export async function search(db: D1Like | null, env: SpotifyEnv, p: SearchParams
   const types = p.q && page === 1 ? "album,artist" : "album";
   const qs = new URLSearchParams({ q, type: types, limit: String(PAGE), offset: String((page - 1) * PAGE), market: MARKET });
   const data = await get<{ albums?: { items: SpAlbum[]; total: number }; artists?: { items: SpArtist[] } }>(db, env, `/search?${qs}`);
-  const albums = dedupeAlbums(data.albums?.items ?? []);
-  const artists = (data.artists?.items ?? []).filter((a) => a.images?.length).slice(0, 8).map(artistToCard);
+  let albums = dedupeAlbums(data.albums?.items ?? []);
+  const artistItems = (data.artists?.items ?? []).filter((a) => a.images?.length);
+  // Typed an artist's name? Put that artist first and lead the crate with their own records,
+  // not just albums whose titles happen to contain the words.
+  const wanted = normalizeName(p.q ?? "");
+  const exactIdx = wanted ? artistItems.findIndex((a) => normalizeName(a.name) === wanted) : -1;
+  if (exactIdx > 0) artistItems.unshift(...artistItems.splice(exactIdx, 1));
+  if (exactIdx >= 0 && page === 1) {
+    try {
+      const own = await get<{ items: SpAlbum[] }>(db, env, `/artists/${artistItems[0].id}/albums?include_groups=album,single,compilation&market=${MARKET}&limit=50`);
+      const theirs = dedupeAlbums(own.items).sort((a, b) => (year(b) ?? 0) - (year(a) ?? 0));
+      albums = dedupeAlbums([...theirs, ...albums]);
+    } catch { /* fall back to the plain search */ }
+  }
+  const artists = artistItems.slice(0, 8).map((a, i) => ({ ...artistToCard(a), exact: i === 0 && exactIdx >= 0 }));
   const total = data.albums?.total ?? albums.length;
   return { records: albums.map(albumToRecord), artists, page, pages: Math.max(1, Math.min(25, Math.ceil(total / PAGE))) };
 }

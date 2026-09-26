@@ -129,10 +129,10 @@ export default function Crate() {
       {artists.length > 0 && (
         <div className="artists-row" aria-label="Artists">
           {artists.map((a) => (
-            <Link key={a.id} to={`/artist/${a.id}`} className="artist-card">
-              <div className="face">{a.thumb && <Art src={a.thumb} alt="" loading="lazy" />}</div>
+            <Link key={a.id} to={`/artist/${a.id}`} className={`artist-card ${a.exact ? "exact" : ""}`}>
+              <div className="face">{(a.exact ? a.image : a.thumb) && <Art src={(a.exact ? a.image : a.thumb)!} alt="" loading="lazy" />}</div>
               <strong>{a.name}</strong>
-              <span>{a.genres.slice(0, 2).join(" · ") || "Artist"}</span>
+              <span>{a.exact ? "Open the artist wall →" : a.genres.slice(0, 2).join(" · ") || "Artist"}</span>
             </Link>
           ))}
         </div>

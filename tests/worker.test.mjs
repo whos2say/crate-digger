@@ -97,7 +97,11 @@ test("catalogue: crates and search come from Spotify with an app token; artists 
   assert.equal(calls.tokenGrants[0], "client_credentials");
   const s = await j(await req("/api/search?q=loose+ends"));
   assert.equal(s.body.artists.length, 1); assert.equal(s.body.artists[0].name, "Loose Ends"); assert.equal(s.body.artists[0].thumb, IMG300);
-  assert.equal(s.body.records.length, 1);
+  // typed the artist's name: they're marked exact and their own discography leads the crate
+  assert.equal(s.body.artists[0].exact, true);
+  assert.deepEqual(s.body.records.map((r) => r.id), ["sp:album:alb3", "sp:album:alb1"]);
+  const s2 = await j(await req("/api/search?q=blue+moon"));
+  assert.equal(s2.body.artists[0].exact, false); assert.deepEqual(s2.body.records.map((r) => r.id), ["sp:album:alb1"]);
   assert.equal((await req("/api/search")).status, 400);
   // a bare decade fans out across genres instead of sending Spotify a filter-only query
   const seen = [];
