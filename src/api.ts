@@ -1,5 +1,5 @@
-import type { ArtistDetail, Crate, Playlist, Record, RecordDetail, SpotifyMatch, Status, TopTen } from "../server/types";
-export type { ArtistDetail, Crate, Playlist, PlaylistTrack, Record, RecordDetail, SpotifyMatch, Status, TopTen, Track } from "../server/types";
+import type { ArtistCard, ArtistDetail, Crate, Playlist, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen } from "../server/types";
+export type { ArtistCard, ArtistDetail, Crate, Playlist, PlaylistTrack, Record, RecordDetail, Sleeve, SpotifyMatch, Status, TopTen, TopTenItem, Track } from "../server/types";
 
 const KEY_STORAGE = "crate:key";
 export function getOwnerKey(): string { try { return localStorage.getItem(KEY_STORAGE) ?? ""; } catch { return ""; } }
@@ -37,13 +37,18 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   status: () => call<Status>("/api/status"),
-  crates: () => call<{ crates: { key: string; label: string }[]; token: boolean; browse: { genres: string[]; styles: string[]; decades: string[] } }>("/api/crates"),
+  crates: () => call<{ crates: { key: string; label: string }[]; browse: { genres: string[]; decades: string[] } }>("/api/crates"),
   crate: (key: string, page = 1) => call<Crate & { pages: number }>(`/api/crates/${key}?page=${page}`),
   search: (params: { [k: string]: string | number | undefined }) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
-    return call<{ records: Record[]; page: number; pages: number }>(`/api/search?${qs}`);
+    return call<{ records: Record[]; artists: ArtistCard[]; page: number; pages: number }>(`/api/search?${qs}`);
   },
+  sleeve: (q: { artist: string; title: string; year?: number }) => {
+    const qs = new URLSearchParams({ artist: q.artist, title: q.title, ...(q.year ? { year: String(q.year) } : {}) });
+    return call<{ sleeve: Sleeve | null }>(`/api/sleeve?${qs}`).then((r) => r.sleeve);
+  },
+  exportTopTen: (id: string) => call<{ list: TopTen; url: string; matched: number; missed: { title: string; artist: string }[] }>(`/api/toptens/${id}/export`, { method: "POST" }),
   record: (id: string) => call<RecordDetail>(`/api/records/${id}`),
   spotifyConnectUrl: () => `/api/spotify/login${getOwnerKey() ? `?key=${encodeURIComponent(getOwnerKey())}` : ""}`,
   spotifyDisconnect: () => call<{ ok: true }>("/api/spotify/disconnect", { method: "POST" }),
@@ -54,7 +59,7 @@ export const api = {
     return call<{ match: SpotifyMatch | null }>(`/api/spotify/match?${qs}`).then((r) => r.match);
   },
   exportPlaylist: (id: string) => call<{ playlist: Playlist; url: string; matched: number; missed: { title: string; artist: string }[] }>(`/api/playlists/${id}/export`, { method: "POST" }),
-  artist: (id: number) => call<ArtistDetail>(`/api/artists/${id}`),
+  artist: (id: string | number) => call<ArtistDetail>(`/api/artists/${id}`),
   topTens: () => call<{ lists: TopTen[] }>("/api/toptens").then((r) => r.lists),
   topTen: (id: string) => call<TopTen>(`/api/toptens/${id}`),
   createTopTen: (t: Partial<TopTen>) => call<TopTen>("/api/toptens", { method: "POST", body: JSON.stringify(t) }),
@@ -76,7 +81,7 @@ export function directImage(url: string | undefined): string {
   if (!url) return "";
   if (url.startsWith("/api/image?")) {
     const u = new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("u");
-    if (u && /^https:\/\/(i|img|st)\.discogs\.com\//.test(u)) return u;
+    if (u && /^https:\/\/([a-z-]+\.)?(discogs\.com|scdn\.co|spotifycdn\.com)\//.test(u)) return u;
   }
   return url;
 }

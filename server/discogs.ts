@@ -1,9 +1,9 @@
-// Discogs access: every call goes through `cached()`, which serves from memory, then from the
-// dg_cache table, then from Discogs. A 429 or network failure serves stale data rather than
-// failing, because the crate view issues bursts of requests while Brendan flips through covers.
+// Discogs is optional now: it powers the "read the sleeve" panel (label, catalogue number, format,
+// country, notes) for a record the crate found on Spotify. Every call goes through `cached()`,
+// which serves from memory, then from the dg_cache table, then from Discogs; a 429 serves stale.
 
 import type { D1Like } from "./db";
-import type { ArtistDetail, Crate, Record, RecordDetail, Track } from "./types";
+import type { Sleeve } from "./types";
 
 const API = "https://api.discogs.com";
 const UA = "CrateDigger/0.1 +https://crate-digger.view.fast";
@@ -97,245 +97,69 @@ export async function cacheSize(db: D1Like | null): Promise<number> {
   return Number(results[0]?.n ?? 0);
 }
 
-// ---------- normalization ----------
-
-export function proxied(url: string | undefined | null): string {
-  if (!url) return "";
-  return "/api/image?u=" + encodeURIComponent(url);
-}
-
-function splitArtist(title: string): { artist: string; album: string } {
-  // Discogs search titles read "Artist - Album".
-  const i = title.indexOf(" - ");
-  if (i < 0) return { artist: "", album: title };
-  return { artist: title.slice(0, i).replace(/\s\(\d+\)$/, ""), album: title.slice(i + 3) };
-}
+// ---------- sleeve lookup ----------
 
 function cleanName(name: string): string {
   return (name || "").replace(/\s\(\d+\)$/, "").trim();
 }
 
-type SearchResult = {
-  id: number; type: string; title: string; year?: string | number; label?: string[]; genre?: string[]; style?: string[];
-  cover_image?: string; thumb?: string; master_id?: number; resource_url?: string; uri?: string;
-};
-
-export function fromSearchResult(r: SearchResult): Record | null {
-  const isMaster = r.type === "master";
-  if (!isMaster && r.type !== "release") return null;
-  const cover = r.cover_image && !r.cover_image.includes("spacer.gif") ? r.cover_image : "";
-  if (!cover) return null; // covers first: nothing to show without one
-  const { artist, album } = splitArtist(r.title);
-  return {
-    id: isMaster ? `dg:m:${r.id}` : `dg:r:${r.id}`,
-    source: "discogs",
-    title: album,
-    artist,
-    year: r.year ? Number(r.year) || undefined : undefined,
-    label: r.label?.[0] ? cleanName(r.label[0]) : undefined,
-    genres: r.genre ?? [],
-    styles: r.style ?? [],
-    cover: proxied(cover),
-    thumb: proxied(r.thumb || cover),
-    url: "https://www.discogs.com" + (r.uri ?? `/${isMaster ? "master" : "release"}/${r.id}`),
-  };
-}
-
+type SearchResult = { id: number; type: "master" | "release"; title: string; year?: string; label?: string[]; catno?: string; country?: string; format?: string[]; genre?: string[]; style?: string[]; cover_image?: string; uri: string };
 type DgRelease = {
-  id: number; title: string; year?: number; artists?: { name: string; id: number }[]; labels?: { name: string }[];
-  genres?: string[]; styles?: string[]; images?: { uri: string; uri150?: string; type?: string }[];
-  tracklist?: { position: string; title: string; duration?: string; type_?: string }[];
-  videos?: { uri: string; title: string }[]; notes?: string; formats?: { name: string; descriptions?: string[] }[];
-  country?: string; uri?: string; main_release?: number; master_id?: number;
+  id: number; title: string; year?: number; country?: string; notes?: string; uri?: string;
+  artists?: { name: string }[]; labels?: { name: string; catno?: string }[]; genres?: string[]; styles?: string[];
+  formats?: { name: string; descriptions?: string[] }[]; images?: { uri: string; type?: string }[];
+  tracklist?: { position: string; title: string; duration?: string }[]; main_release?: number;
 };
 
-function primaryImage(images?: DgRelease["images"]) {
-  if (!images?.length) return undefined;
-  return images.find((i) => i.type === "primary") ?? images[0];
-}
+function norm(s: string): string { return s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/\(.*?\)|\[.*?\]/g, "").replace(/[^a-z0-9]+/g, " ").trim(); }
 
-function youtubeId(uri: string): string | undefined {
-  const m = uri.match(/[?&]v=([\w-]{6,})/) || uri.match(/youtu\.be\/([\w-]{6,})/);
-  return m?.[1];
-}
-
-function matchVideos(tracks: Track[], videos: { id: string; title: string }[]) {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  for (const t of tracks) {
-    const nt = norm(t.title);
-    if (!nt) continue;
-    const v = videos.find((v) => norm(v.title).includes(nt));
-    if (v) t.youtube = v.id;
+/** Find the Discogs master (or release) for an album and read its sleeve. */
+export async function sleeve(ctx: Ctx, artist: string, title: string, year?: number): Promise<Sleeve | null> {
+  if (!ctx.token) throw new DiscogsError("Reading sleeves needs a Discogs token on the Space.", 401);
+  const qs = new URLSearchParams({ artist, release_title: title, type: "master", per_page: "10" });
+  let data = (await cached(ctx, `/database/search?${qs}`, SEARCH_FRESH_MS)) as { results: SearchResult[] };
+  if (!data.results.length) {
+    const alt = new URLSearchParams({ q: `${artist} ${title}`, type: "release", per_page: "10" });
+    data = (await cached(ctx, `/database/search?${alt}`, SEARCH_FRESH_MS)) as { results: SearchResult[] };
   }
-}
-
-export function fromRelease(r: DgRelease, kind: "m" | "r"): RecordDetail {
-  const img = primaryImage(r.images);
-  const artist = (r.artists ?? []).map((a) => cleanName(a.name)).join(", ");
-  const tracks: Track[] = (r.tracklist ?? []).filter((t) => t.type_ !== "heading").map((t) => ({
-    position: t.position, title: t.title, duration: t.duration || undefined,
-  }));
-  const videos = (r.videos ?? []).map((v) => ({ id: youtubeId(v.uri) ?? "", title: v.title })).filter((v) => v.id);
-  matchVideos(tracks, videos);
+  const want = norm(title);
+  const scored = data.results
+    .map((r) => {
+      const t = r.title.includes(" - ") ? r.title.slice(r.title.indexOf(" - ") + 3) : r.title;
+      let score = norm(t) === want ? 2 : norm(t).includes(want) || want.includes(norm(t)) ? 1 : 0;
+      if (year && r.year && Math.abs(Number(r.year) - year) <= 1) score += 0.5;
+      if (r.type === "master") score += 0.25;
+      return { r, score };
+    })
+    .filter((x) => x.score >= 1)
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0]?.r;
+  if (!best) return null;
+  const detail = (await cached(ctx, `/${best.type === "master" ? "masters" : "releases"}/${best.id}`)) as DgRelease;
+  let release = detail;
+  if (best.type === "master" && detail.main_release) {
+    try { release = (await cached(ctx, `/releases/${detail.main_release}`)) as DgRelease; } catch { /* master alone is fine */ }
+  }
+  const label = release.labels?.[0] ?? detail.labels?.[0];
   return {
-    id: `dg:${kind}:${r.id}`,
-    source: "discogs",
-    title: r.title,
-    artist,
-    artistId: r.artists?.[0]?.id,
-    year: r.year || undefined,
-    label: r.labels?.[0]?.name ? cleanName(r.labels[0].name) : undefined,
-    genres: r.genres ?? [],
-    styles: r.styles ?? [],
-    cover: proxied(img?.uri),
-    thumb: proxied(img?.uri150 ?? img?.uri),
-    url: "https://www.discogs.com" + (r.uri ?? `/${kind === "m" ? "master" : "release"}/${r.id}`),
-    tracks,
-    videos,
-    notes: r.notes,
-    formats: r.formats?.map((f) => [f.name, ...(f.descriptions ?? [])].join(" ")),
-    country: r.country,
+    url: `https://www.discogs.com/${best.type}/${best.id}`,
+    title: detail.title,
+    artist: (detail.artists ?? []).map((a) => cleanName(a.name)).join(", ") || artist,
+    year: detail.year || release.year || (best.year ? Number(best.year) : undefined),
+    label: label ? cleanName(label.name) : undefined,
+    catno: label?.catno && label.catno !== "none" ? label.catno : undefined,
+    country: release.country,
+    formats: release.formats?.map((f) => [f.name, ...(f.descriptions ?? [])].join(" ")).filter(Boolean),
+    genres: detail.genres ?? release.genres ?? best.genre ?? [],
+    styles: detail.styles ?? release.styles ?? best.style ?? [],
+    notes: (release.notes ?? detail.notes)?.replace(/\[.*?\]/g, "").trim().slice(0, 1200) || undefined,
+    tracks: (release.tracklist ?? detail.tracklist ?? []).filter((t) => t.title).map((t) => ({ position: t.position, title: t.title, duration: t.duration || undefined })),
+    cover: (detail.images?.find((i) => i.type === "primary") ?? detail.images?.[0])?.uri,
   };
-}
-
-// ---------- public API ----------
-
-export async function getRecord(ctx: Ctx, id: string): Promise<RecordDetail> {
-  const m = id.match(/^dg:(m|r):(\d+)$/);
-  if (!m) throw new DiscogsError("Unknown record id.", 400);
-  const kind = m[1] as "m" | "r";
-  const data = (await cached(ctx, `/${kind === "m" ? "masters" : "releases"}/${m[2]}`)) as DgRelease;
-  const detail = fromRelease(data, kind);
-  // Masters carry no label; borrow it from the main release, cheaply and cached.
-  if (kind === "m" && (!detail.label || !detail.tracks.length) && data.main_release) {
-    try {
-      const main = (await cached(ctx, `/releases/${data.main_release}`)) as DgRelease;
-      const md = fromRelease(main, "r");
-      detail.label ||= md.label;
-      detail.country ||= md.country;
-      detail.formats ||= md.formats;
-      if (!detail.tracks.length) detail.tracks = md.tracks;
-      if (!detail.videos.length) detail.videos = md.videos;
-    } catch { /* main release is a nicety */ }
-  }
-  return detail;
-}
-
-export interface SearchParams {
-  q?: string; genre?: string; style?: string; year?: string; label?: string; page?: number; perPage?: number; type?: "master" | "release";
-}
-
-export async function search(ctx: Ctx, p: SearchParams): Promise<{ records: Record[]; page: number; pages: number }> {
-  const qs = new URLSearchParams();
-  if (p.q) qs.set("q", p.q);
-  if (p.genre) qs.set("genre", p.genre);
-  if (p.style) qs.set("style", p.style);
-  if (p.year) qs.set("year", p.year);
-  if (p.label) qs.set("label", p.label);
-  qs.set("type", p.type ?? "master");
-  qs.set("per_page", String(p.perPage ?? 40));
-  qs.set("page", String(p.page ?? 1));
-  const data = (await cached(ctx, `/database/search?${qs}`, SEARCH_FRESH_MS)) as {
-    results: SearchResult[]; pagination: { page: number; pages: number };
-  };
-  const seen = new Set<string>();
-  const records: Record[] = [];
-  for (const r of data.results) {
-    const rec = fromSearchResult(r);
-    if (rec && !seen.has(rec.cover)) { seen.add(rec.cover); records.push(rec); }
-  }
-  return { records, page: data.pagination.page, pages: data.pagination.pages };
-}
-
-export async function getArtist(ctx: Ctx, artistId: number): Promise<ArtistDetail> {
-  type DgArtist = { id: number; name: string; profile?: string; images?: { uri: string; type?: string }[] };
-  type DgArtistRelease = { id: number; type: "master" | "release"; title: string; year?: number; label?: string; role?: string; thumb?: string; artist?: string; main_release?: number; format?: string };
-  const [artist, rels] = await Promise.all([
-    cached(ctx, `/artists/${artistId}`) as Promise<DgArtist>,
-    cached(ctx, `/artists/${artistId}/releases?sort=year&sort_order=asc&per_page=100`) as Promise<{ releases: DgArtistRelease[] }>,
-  ]);
-  const seen = new Set<string>();
-  const records: Record[] = [];
-  for (const r of rels.releases) {
-    if (r.role && r.role !== "Main") continue;
-    if (!r.thumb || r.thumb.includes("spacer.gif")) continue;
-    const key = r.title.toLowerCase();
-    if (seen.has(key)) continue; // masters and their releases both appear; keep the first
-    seen.add(key);
-    // The artist-releases feed only carries a 150px thumb. Full art loads lazily via /api/records/:id.
-    records.push({
-      id: r.type === "master" ? `dg:m:${r.id}` : `dg:r:${r.id}`,
-      source: "discogs",
-      title: r.title,
-      artist: cleanName(r.artist || artist.name),
-      artistId,
-      year: r.year || undefined,
-      label: r.label ? cleanName(r.label) : undefined,
-      genres: [], styles: [],
-      cover: proxied(r.thumb.replace("/h:150/", "/h:600/").replace("/w:150/", "/w:600/")),
-      thumb: proxied(r.thumb),
-      url: `https://www.discogs.com/${r.type}/${r.id}`,
-    });
-  }
-  const img = artist.images?.find((i) => i.type === "primary") ?? artist.images?.[0];
-  return {
-    id: artist.id,
-    name: cleanName(artist.name),
-    profile: artist.profile?.replace(/\[.*?\]/g, "").slice(0, 600),
-    image: proxied(img?.uri),
-    records,
-    keyTracks: [], // filled client-side from the first few records' tracklists
-  };
-}
-
-// The home crate. With a token these are live Discogs searches; without, a set of artists
-// whose discographies load from endpoints that need no token.
-const TOKEN_CRATES: { key: string; label: string; params: SearchParams }[] = [
-  { key: "deep-house-90s", label: "Deep house, nineties", params: { style: "Deep House", year: "1990-1999" } },
-  { key: "disco-12s", label: "Disco twelves", params: { style: "Disco", year: "1976-1983" } },
-  { key: "detroit", label: "Detroit", params: { style: "Techno", label: "Underground Resistance" } },
-  { key: "jazz-funk", label: "Jazz-funk", params: { style: "Jazz-Funk", year: "1970-1979" } },
-  { key: "balearic", label: "Balearic and ambient", params: { style: "Balearic", year: "1985-1995" } },
-  { key: "uk-garage", label: "UK garage", params: { style: "UK Garage", year: "1996-2002" } },
-  { key: "bossa", label: "Bossa and MPB", params: { style: "Bossa Nova", year: "1960-1975" } },
-  { key: "dub", label: "Dub", params: { style: "Dub", year: "1972-1982" } },
-];
-const STARTER_ARTISTS = [1289 /* Daft Punk */, 45 /* Aphex Twin */, 2262, 3838, 21706, 5117, 1201, 2735];
-
-export function crateDefinitions(): { key: string; label: string }[] {
-  return TOKEN_CRATES.map(({ key, label }) => ({ key, label }));
-}
-
-export async function crate(ctx: Ctx, key: string, page = 1): Promise<Crate & { pages: number }> {
-  const def = TOKEN_CRATES.find((c) => c.key === key);
-  if (def) {
-    if (!ctx.token) throw new DiscogsError("Browsing by genre, era and label needs a Discogs token.", 401);
-    const res = await search(ctx, { ...def.params, page });
-    return { key, label: def.label, records: res.records, pages: res.pages };
-  }
-  if (key === "starter") {
-    const settled = await Promise.allSettled(STARTER_ARTISTS.map((id) => getArtist(ctx, id)));
-    const records: Record[] = [];
-    for (const s of settled) if (s.status === "fulfilled") records.push(...s.value.records.slice(0, 8));
-    return { key, label: "Starter crate", records, pages: 1 };
-  }
-  throw new DiscogsError("No such crate.", 404);
-}
-
-// Discogs genre / style / decade / label browse
-export const GENRES = ["Electronic", "Funk / Soul", "Jazz", "Hip Hop", "Reggae", "Rock", "Latin", "Pop", "Folk, World, & Country", "Stage & Screen"];
-export const STYLES = ["Deep House", "House", "Techno", "Disco", "Boogie", "Jazz-Funk", "Soul", "Dub", "Downtempo", "Breaks", "UK Garage", "Ambient", "Balearic", "Afrobeat", "Italo-Disco", "Electro", "Drum n Bass", "Acid", "Minimal", "Bossa Nova"];
-export const DECADES = ["1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s"];
-
-export function decadeRange(decade: string): string | undefined {
-  const m = decade.match(/^(\d{4})s$/);
-  if (!m) return undefined;
-  const y = Number(m[1]);
-  return `${y}-${y + 9}`;
 }
 
 // ---------- image proxy ----------
-const IMAGE_HOSTS = new Set(["i.discogs.com", "img.discogs.com", "st.discogs.com", "i.scdn.co", "mosaic.scdn.co"]);
+const IMAGE_HOSTS = new Set(["i.discogs.com", "img.discogs.com", "st.discogs.com", "i.scdn.co", "mosaic.scdn.co", "image-cdn-ak.spotifycdn.com", "image-cdn-fa.spotifycdn.com"]);
 
 export async function proxyImage(u: string): Promise<Response> {
   let url: URL;

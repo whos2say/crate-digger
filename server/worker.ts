@@ -2,6 +2,7 @@
 
 import { isOwner, ownerKeySet } from "./auth";
 import { ensureSchema, type D1Like } from "./db";
+import * as catalog from "./catalog";
 import * as dg from "./discogs";
 import * as lists from "./lists";
 import { renderShare } from "./share";
@@ -48,37 +49,54 @@ export default {
         };
         return json(status);
       }
-      if (path === "/api/health") return json({ ok: true, db: !!db, discogsToken: !!ctx.token, time: new Date().toISOString() });
+      if (path === "/api/health") return json({ ok: true, db: !!db, spotify: sp.configured(env), discogsToken: !!ctx.token, time: new Date().toISOString() });
 
-      // ---- images ----
+      // ---- images (fallback + palette reads; the browser loads covers straight from the CDN) ----
       if (path === "/api/image") {
         const u = url.searchParams.get("u");
         if (!u) return err("Missing u", 400);
         return dg.proxyImage(u);
       }
 
-      // ---- discogs ----
-      if (path === "/api/crates") return json({ crates: dg.crateDefinitions(), token: !!ctx.token, browse: { genres: dg.GENRES, styles: dg.STYLES, decades: dg.DECADES } }, 200, CACHED);
+      // ---- catalogue (Spotify) ----
+      if (path === "/api/crates") return json({ crates: catalog.crateDefinitions(), browse: { genres: catalog.GENRES, decades: catalog.DECADES } }, 200, CACHED);
       m = path.match(/^\/api\/crates\/([\w-]+)$/);
-      if (m) return json(await dg.crate(ctx, m[1], Number(url.searchParams.get("page") ?? 1)), 200, CACHED);
+      if (m) return json(await catalog.crate(db, env, m[1], Number(url.searchParams.get("page") ?? 1)), 200, CACHED);
       if (path === "/api/search") {
         const decade = url.searchParams.get("decade");
-        const p: dg.SearchParams = {
+        const p: catalog.SearchParams = {
           q: url.searchParams.get("q") ?? undefined,
-          genre: url.searchParams.get("genre") ?? undefined,
-          style: url.searchParams.get("style") ?? undefined,
+          genre: url.searchParams.get("genre") ?? url.searchParams.get("style") ?? undefined,
           label: url.searchParams.get("label") ?? undefined,
-          year: url.searchParams.get("year") ?? (decade ? dg.decadeRange(decade) : undefined),
+          year: url.searchParams.get("year") ?? (decade ? catalog.decadeRange(decade) : undefined),
           page: Number(url.searchParams.get("page") ?? 1),
-          type: (url.searchParams.get("type") as "master" | "release") ?? "master",
         };
-        if (!p.q && !p.genre && !p.style && !p.label && !p.year) return err("Give me something to dig for.", 400);
-        return json(await dg.search(ctx, p), 200, CACHED);
+        return json(await catalog.search(db, env, p), 200, CACHED);
       }
       m = path.match(/^\/api\/records\/([\w:]+)$/);
-      if (m) return json(await dg.getRecord(ctx, m[1]), 200, CACHED);
-      m = path.match(/^\/api\/artists\/(\d+)$/);
-      if (m) return json(await dg.getArtist(ctx, Number(m[1])), 200, CACHED);
+      if (m) return json(await catalog.getRecord(db, env, m[1]), 200, CACHED);
+      m = path.match(/^\/api\/artists\/([A-Za-z0-9]+)$/);
+      if (m) return json(await catalog.getArtist(db, env, m[1]), 200, CACHED);
+
+      // ---- the back of the sleeve (Discogs, on demand) ----
+      if (path === "/api/sleeve") {
+        const artist = url.searchParams.get("artist"), title = url.searchParams.get("title");
+        if (!artist || !title) return err("Need artist and title.", 400);
+        const y = Number(url.searchParams.get("year"));
+        return json({ sleeve: await dg.sleeve(ctx, artist, title, y || undefined) }, 200, CACHED);
+      }
+
+      // ---- export a Top Ten to Spotify ----
+      m = path.match(/^\/api\/toptens\/([\w-]+)\/export$/);
+      if (m && request.method === "POST") {
+        const e = needsDb(); if (e) return e;
+        const g = guard(); if (g) return g;
+        const list = await lists.getTopTen(db!, m[1]);
+        if (!list) return err("Not found", 404);
+        const result = await sp.exportTopTen(db!, env, list);
+        const saved = await lists.updateTopTen(db!, list.id, { spotifyPlaylistId: result.playlistId, items: result.items });
+        return json({ list: saved, url: result.url, matched: result.matched, missed: result.missed });
+      }
 
       // ---- top tens ----
       if (path === "/api/toptens") {
@@ -103,7 +121,7 @@ export default {
         const list = await lists.getPlaylist(db!, m[1]);
         if (!list) return err("Not found", 404);
         const result = await sp.exportPlaylist(db!, env, list);
-        const saved = await lists.updatePlaylist(db!, list.id, { spotifyPlaylistId: result.playlistId, tracks: result.tracks });
+        const saved = await lists.updatePlaylist(db!, list.id, { spotifyPlaylistId: result.playlistId, tracks: result.items });
         return json({ playlist: saved, url: result.url, matched: result.matched, missed: result.missed });
       }
 
@@ -159,8 +177,7 @@ export default {
 
       return err("No such route.", 404);
     } catch (e) {
-      if (e instanceof sp.SpotifyError) return err(e.message, e.status);
-      if (e instanceof dg.DiscogsError) {
+      if (e instanceof sp.SpotifyError || e instanceof dg.DiscogsError) {
         const extra: Record<string, string> = e.status === 429 ? { "Retry-After": String(Math.ceil((e.retryAfterMs ?? 8000) / 1000)) } : {};
         return json({ error: e.message, retryAfter: e.retryAfterMs ? Math.ceil(e.retryAfterMs / 1000) : undefined }, e.status, extra);
       }

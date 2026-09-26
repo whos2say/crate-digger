@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { NavLink, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getOwnerKey, setOwnerKey, type Playlist, type Record, type Status, type TopTen, type Track } from "./api";
+import Player, { usePlayback } from "./components/Player";
 import RecordSheet from "./components/RecordSheet";
 import Picker from "./components/Picker";
 import Crate from "./views/Crate";
@@ -10,13 +11,17 @@ import { PlaylistEditor, Playlists } from "./views/Playlists";
 
 interface Shell {
   status: Status | null;
+  /** Full-track playback through Spotify Premium; opens the track in Spotify when that isn't available. */
+  play: (record: Record, track: Track) => void;
+  nowPlaying: { record: Record; track: Track } | null;
+  canPlay: boolean;
   refreshStatus: () => void;
   open: (r: Record, pool?: Record[]) => void;
   close: () => void;
   openRecord: Record | null;
   pool: Record[];
   toast: (msg: string) => void;
-  addToTopTen: (r: Record) => void;
+  addToTopTen: (r: Record, t?: Track) => void;
   addToPlaylist: (r: Record, t: Track) => void;
   addAllToPlaylist: (items: { record: Record; track: Track }[]) => void;
   unlock: () => void;
@@ -30,7 +35,7 @@ export default function App() {
   const [openRecord, setOpenRecord] = useState<Record | null>(null);
   const [pool, setPool] = useState<Record[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
-  const [picker, setPicker] = useState<null | { kind: "topten"; record: Record } | { kind: "playlist"; items: { record: Record; track: Track }[] }>(null);
+  const [picker, setPicker] = useState<null | { kind: "topten"; record: Record; track?: Track } | { kind: "playlist"; items: { record: Record; track: Track }[] }>(null);
   const navigate = useNavigate();
 
   const refreshStatus = useCallback(() => { api.status().then(setStatus).catch(() => setStatus(null)); }, []);
@@ -73,14 +78,17 @@ export default function App() {
     return false;
   }, [status, toast, unlock]);
 
+  const playback = usePlayback(status, toast);
+
   const shell = useMemo<Shell>(() => ({
     status, refreshStatus, openRecord, pool, toast, unlock,
+    play: playback.play, nowPlaying: playback.now, canPlay: playback.canPlay,
     open: (r, p) => { setOpenRecord(r); if (p) setPool(p); },
     close: () => setOpenRecord(null),
-    addToTopTen: (record) => { if (!needUnlock()) setPicker({ kind: "topten", record }); },
+    addToTopTen: (record, track) => { if (!needUnlock()) setPicker({ kind: "topten", record, track }); },
     addToPlaylist: (record, track) => { if (!needUnlock()) setPicker({ kind: "playlist", items: [{ record, track }] }); },
     addAllToPlaylist: (items) => { if (!needUnlock()) setPicker({ kind: "playlist", items }); },
-  }), [status, refreshStatus, openRecord, pool, toast, unlock, needUnlock]);
+  }), [status, refreshStatus, openRecord, pool, toast, unlock, needUnlock, playback]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPicker(null); setOpenRecord(null); } };
@@ -102,7 +110,7 @@ export default function App() {
           <div className="status">
             {status && (
               <>
-                <span>Discogs <b>{status.discogs.token ? "on" : "no token"}</b></span>
+                <span title="Discogs powers the ‘read the sleeve’ panel">Sleeves <b>{status.discogs.token ? "on" : "off"}</b></span>
                 {status.spotify.connected ? (
                   <span title={status.spotify.user?.product === "premium" ? "Premium: full tracks play in the crate" : "Free: 30-second previews"}>
                     Spotify <b className="sp-user">{status.spotify.user?.name ?? "connected"}</b>
@@ -137,11 +145,12 @@ export default function App() {
             title="Add to a Top Ten"
             load={api.topTens}
             describe={(t) => `${t.items.length}/10`}
-            create={(title) => api.createTopTen({ title, items: [picker.record] }).then((t) => { toast(`Started “${t.title}”`); navigate(`/top-tens/${t.id}`); })}
+            create={(title) => api.createTopTen({ title, items: [{ record: picker.record, track: picker.track }] }).then((t) => { toast(`Started “${t.title}”`); navigate(`/top-tens/${t.id}`); })}
             choose={async (t) => {
-              if (t.items.some((i) => i.id === picker.record.id)) return toast("Already in that list");
+              const key = picker.track?.spotifyUri ?? picker.record.id;
+              if (t.items.some((i) => (i.track?.spotifyUri ?? i.record.id) === key)) return toast("Already in that list");
               if (t.items.length >= 10) return toast("That list is full — open it to swap something out");
-              await api.updateTopTen(t.id, { items: [...t.items, picker.record] });
+              await api.updateTopTen(t.id, { items: [...t.items, { record: picker.record, track: picker.track }] });
               toast(`Added to “${t.title}” at #${t.items.length + 1}`);
             }}
             onClose={() => setPicker(null)}
@@ -160,6 +169,7 @@ export default function App() {
             onClose={() => setPicker(null)}
           />
         )}
+        <Player playback={playback} />
         {msg && <div className="toast" role="status">{msg}</div>}
       </div>
     </ShellCtx.Provider>

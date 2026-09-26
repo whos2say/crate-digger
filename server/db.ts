@@ -24,9 +24,13 @@ export function ensureSchema(db: D1Like): Promise<void> {
       title VARCHAR(200) NOT NULL,
       blurb TEXT NOT NULL,
       items LONGTEXT NOT NULL,
+      spotify_playlist_id VARCHAR(64) NULL,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
     )`).run();
+    // Tables created before Top Tens could be exported lack the column; adding it is idempotent enough
+    // (the error on a second run is swallowed).
+    await db.prepare(`ALTER TABLE top_tens ADD COLUMN spotify_playlist_id VARCHAR(64) NULL`).run().catch(() => {});
     await db.prepare(`CREATE TABLE IF NOT EXISTS playlists (
       id VARCHAR(32) PRIMARY KEY,
       title VARCHAR(200) NOT NULL,

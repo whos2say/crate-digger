@@ -18,7 +18,7 @@ export function Art({ src, fallback, onSettled, ...rest }: { src: string; fallba
   );
 }
 
-export function Cover({ record, onClick, rank, className, children }: { record: Record; onClick?: () => void; rank?: number; className?: string; children?: ReactNode }) {
+export function Cover({ record, onClick, rank, className, children, caption }: { record: Record; onClick?: () => void; rank?: number; className?: string; children?: ReactNode; caption?: { title: string; sub: string } }) {
   const [loaded, setLoaded] = useState(false);
   const { openRecord } = useShell();
   return (
@@ -28,8 +28,8 @@ export function Cover({ record, onClick, rank, className, children }: { record: 
       </button>
       {rank !== undefined && <span className="rank" aria-hidden="true">{rank}</span>}
       <div className="label">
-        <strong>{record.title}</strong>
-        <span>{record.artist}{record.year ? ` · ${record.year}` : ""}</span>
+        <strong>{caption?.title ?? record.title}</strong>
+        <span>{caption?.sub ?? `${record.artist}${record.year ? ` · ${record.year}` : ""}`}</span>
       </div>
       {children}
     </div>

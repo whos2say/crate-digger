@@ -26,4 +26,4 @@ createServer(async (req, res) => {
   const r = await mod.default.fetch(new Request("http://localhost:8788" + req.url, { method: req.method, headers: req.headers, body: ["GET", "HEAD"].includes(req.method) ? undefined : body }), env);
   res.writeHead(r.status, Object.fromEntries(r.headers));
   res.end(Buffer.from(await r.arrayBuffer()));
-}).listen(8788, () => console.log("worker on http://127.0.0.1:8788  (db:", !!env.DB, "discogs token:", !!env.DISCOGS_TOKEN, ")"));
+}).listen(8788, () => console.log("worker on http://127.0.0.1:8788  (db:", !!env.DB, "spotify:", !!env.SPOTIFY_CLIENT_ID, "discogs:", !!env.DISCOGS_TOKEN, ")"));

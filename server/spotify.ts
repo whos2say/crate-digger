@@ -5,7 +5,7 @@
 // redirect URI, then set SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET and APP_ORIGIN on the Space.
 
 import { kvDel, kvGet, kvSet, type D1Like } from "./db";
-import type { Playlist, PlaylistTrack, SpotifyMatch } from "./types";
+import type { Playlist, PlaylistTrack, SpotifyMatch, TopTen, TopTenItem } from "./types";
 
 const ACCOUNTS = "https://accounts.spotify.com";
 const API = "https://api.spotify.com/v1";
@@ -17,7 +17,7 @@ const STATE_TTL_MS = 10 * 60 * 1000;
 const MATCH_FRESH_MS = 30 * 24 * 3600 * 1000;
 
 export class SpotifyError extends Error {
-  constructor(message: string, public status: number) { super(message); }
+  constructor(message: string, public status: number, public retryAfterMs?: number) { super(message); }
 }
 
 export interface SpotifyEnv { SPOTIFY_CLIENT_ID?: string; SPOTIFY_CLIENT_SECRET?: string; APP_ORIGIN?: string; [k: string]: unknown }
@@ -170,7 +170,7 @@ async function apiFetch<T>(token: string, path: string, init: RequestInit = {}):
   if (!res.ok) {
     let msg = text;
     try { msg = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? msg; } catch { /* keep text */ }
-    if (res.status === 429) throw new SpotifyError(`Spotify is rate limiting us. Try again in ${res.headers.get("Retry-After") ?? "a few"}s.`, 429);
+    if (res.status === 429) { const w = Number(res.headers.get("Retry-After") ?? 5); throw new SpotifyError(`Spotify is rate limiting us. Retrying in ${w}s.`, 429, w * 1000); }
     throw new SpotifyError(`Spotify answered ${res.status}: ${msg}`, res.status === 401 || res.status === 403 ? 401 : 502);
   }
   return (text ? JSON.parse(text) : undefined) as T;
@@ -224,7 +224,7 @@ export async function matchTrack(db: D1Like, env: SpotifyEnv, q: MatchQuery): Pr
     for (const t of res.tracks?.items ?? []) {
       const title = overlap(t.name, q.title);
       const artist = Math.max(...t.artists.map((a) => overlap(a.name, q.artist)), 0);
-      const album = q.album ? overlap(t.album.name, q.album) * 0.3 : 0;
+      const album = q.album && t.album?.name ? overlap(t.album.name, q.album) * 0.3 : 0;
       const dur = wantMs ? Math.max(0, 0.2 - Math.abs(t.duration_ms - wantMs) / wantMs) : 0;
       const score = title * 0.55 + artist * 0.35 + album + dur + (t.preview_url ? 0.02 : 0);
       if (!best || score > best.score) best = { t, score };
@@ -236,7 +236,7 @@ export async function matchTrack(db: D1Like, env: SpotifyEnv, q: MatchQuery): Pr
     id: best.t.id,
     title: best.t.name,
     artist: best.t.artists.map((a) => a.name).join(", "),
-    album: best.t.album.name,
+    album: best.t.album?.name ?? "",
     durationMs: best.t.duration_ms,
     previewUrl: best.t.preview_url ?? undefined,
     url: best.t.external_urls.spotify,
@@ -248,25 +248,53 @@ export async function matchTrack(db: D1Like, env: SpotifyEnv, q: MatchQuery): Pr
 
 // ---------- playlist export ----------
 
-export interface ExportResult { playlistId: string; url: string; matched: number; missed: { title: string; artist: string }[]; tracks: PlaylistTrack[] }
+export interface ExportResult<T> { playlistId: string; url: string; matched: number; missed: { title: string; artist: string }[]; items: T[] }
 
-export async function exportPlaylist(db: D1Like, env: SpotifyEnv, list: Playlist): Promise<ExportResult> {
-  const { accessToken: token, user } = await accessToken(db, env);
+/** Album-only Top Ten items export their first track; look it up once and remember it on the item. */
+async function firstTrackOf(token: string, record: { id: string }): Promise<{ uri: string; url: string; name: string } | null> {
+  const m = record.id.match(/^sp:album:([A-Za-z0-9]+)$/);
+  if (!m) return null;
+  const a = await apiFetch<{ items: { uri: string; name: string; external_urls: { spotify: string } }[] }>(token, `/albums/${m[1]}/tracks?limit=1`);
+  const t = a.items[0];
+  return t ? { uri: t.uri, url: t.external_urls.spotify, name: t.name } : null;
+}
+
+async function resolveUris<T extends { record: PlaylistTrack["record"]; track?: PlaylistTrack["track"] }>(db: D1Like, env: SpotifyEnv, token: string, items: T[]): Promise<{ uris: string[]; missed: { title: string; artist: string }[]; items: T[] }> {
   const uris: string[] = [];
   const missed: { title: string; artist: string }[] = [];
-  const tracks: PlaylistTrack[] = [];
-  for (const pt of list.tracks) {
-    let uri = pt.track.spotifyUri;
-    let track = pt.track;
-    if (!uri) {
-      const m = await matchTrack(db, env, { title: pt.track.title, artist: pt.record.artist, album: pt.record.title, duration: pt.track.duration });
-      if (m) { uri = m.uri; track = { ...pt.track, spotifyUri: m.uri, spotifyUrl: m.url, previewUrl: m.previewUrl }; }
+  const out: T[] = [];
+  for (const it of items) {
+    let track = it.track;
+    let uri = track?.spotifyUri;
+    if (!uri && track) {
+      const m = await matchTrack(db, env, { title: track.title, artist: track.artist || it.record.artist, album: it.record.title, duration: track.duration });
+      if (m) { uri = m.uri; track = { ...track, spotifyUri: m.uri, spotifyUrl: m.url, previewUrl: m.previewUrl }; }
     }
-    if (uri) uris.push(uri); else missed.push({ title: pt.track.title, artist: pt.record.artist });
-    tracks.push({ ...pt, track });
+    if (!uri && !track) {
+      const first = await firstTrackOf(token, it.record).catch(() => null);
+      if (first) { uri = first.uri; track = { position: "1", title: first.name, spotifyUri: first.uri, spotifyUrl: first.url }; }
+    }
+    if (uri) uris.push(uri); else missed.push({ title: track?.title ?? it.record.title, artist: it.record.artist });
+    out.push(track ? { ...it, track } : it);
   }
+  return { uris, missed, items: out };
+}
+
+export async function exportPlaylist(db: D1Like, env: SpotifyEnv, list: Playlist): Promise<ExportResult<PlaylistTrack>> {
+  const r = await exportList(db, env, list.title, list.blurb, list.spotifyPlaylistId, list.tracks);
+  return { ...r, items: r.items };
+}
+
+export async function exportTopTen(db: D1Like, env: SpotifyEnv, list: TopTen): Promise<ExportResult<TopTenItem>> {
+  return exportList(db, env, list.title, list.blurb, list.spotifyPlaylistId, list.items);
+}
+
+async function exportList<T extends { record: PlaylistTrack["record"]; track?: PlaylistTrack["track"] }>(db: D1Like, env: SpotifyEnv, title: string, blurb: string, existingId: string | undefined, input: T[]): Promise<ExportResult<T>> {
+  const { accessToken: token, user } = await accessToken(db, env);
+  const { uris, missed, items } = await resolveUris(db, env, token, input);
+  const list = { title, blurb };
   const description = (list.blurb || "Built in Crate Digger").slice(0, 300);
-  let playlistId = list.spotifyPlaylistId;
+  let playlistId = existingId;
   let url: string;
   if (playlistId) {
     // Already exported once: bring the Spotify playlist in line with the set as it is now.
@@ -282,5 +310,5 @@ export async function exportPlaylist(db: D1Like, env: SpotifyEnv, list: Playlist
     url = created.external_urls.spotify;
     for (let i = 0; i < uris.length; i += 100) await apiFetch(token, `/playlists/${playlistId}/tracks`, { method: "POST", body: JSON.stringify({ uris: uris.slice(i, i + 100) }) });
   }
-  return { playlistId, url, matched: uris.length, missed, tracks };
+  return { playlistId, url, matched: uris.length, missed, items };
 }

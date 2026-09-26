@@ -1,12 +1,23 @@
 import { newId, slugify, type D1Like } from "./db";
-import type { Playlist, PlaylistTrack, Record, TopTen } from "./types";
+import type { Playlist, PlaylistTrack, Record, TopTen, TopTenItem } from "./types";
 
 // ---------- Top Tens ----------
 
-type TopTenRow = { id: string; slug: string; title: string; blurb: string; items: string; created_at: number; updated_at: number };
+type TopTenRow = { id: string; slug: string; title: string; blurb: string; items: string; spotify_playlist_id?: string | null; created_at: number; updated_at: number };
+
+/** Rows written before Top Tens carried tracks hold bare Records; read them as album-only items. */
+function upgradeItems(raw: unknown): TopTenItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x) => (x && typeof x === "object" && "record" in x ? (x as TopTenItem) : { record: x as Record }));
+}
 
 function rowToTopTen(r: TopTenRow): TopTen {
-  return { id: r.id, slug: r.slug, title: r.title, blurb: r.blurb, items: JSON.parse(r.items), createdAt: Number(r.created_at), updatedAt: Number(r.updated_at) };
+  const spotifyPlaylistId = r.spotify_playlist_id ?? undefined;
+  return {
+    id: r.id, slug: r.slug, title: r.title, blurb: r.blurb, items: upgradeItems(JSON.parse(r.items)),
+    spotifyPlaylistId, spotifyUrl: spotifyPlaylistId ? `https://open.spotify.com/playlist/${spotifyPlaylistId}` : undefined,
+    createdAt: Number(r.created_at), updatedAt: Number(r.updated_at),
+  };
 }
 
 export async function listTopTens(db: D1Like): Promise<TopTen[]> {
@@ -19,12 +30,14 @@ export async function getTopTen(db: D1Like, idOrSlug: string): Promise<TopTen | 
   return results[0] ? rowToTopTen(results[0]) : null;
 }
 
-function cleanItems(items: unknown): Record[] {
-  if (!Array.isArray(items)) return [];
+export function itemKey(i: TopTenItem): string { return i.track?.spotifyUri ?? `${i.record.id}:${i.track?.position ?? ""}`; }
+
+function cleanItems(items: unknown): TopTenItem[] {
   const seen = new Set<string>();
-  return items
-    .filter((r): r is Record => !!r && typeof r === "object" && typeof (r as Record).id === "string" && typeof (r as Record).cover === "string")
-    .filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
+  return upgradeItems(items)
+    .filter((i) => !!i.record && typeof i.record.id === "string" && typeof i.record.cover === "string")
+    .map((i) => ({ record: i.record, ...(i.track && typeof i.track === "object" && i.track.title ? { track: i.track } : {}) }))
+    .filter((i) => (seen.has(itemKey(i)) ? false : (seen.add(itemKey(i)), true)))
     .slice(0, 10);
 }
 
@@ -56,14 +69,17 @@ export async function updateTopTen(db: D1Like, id: string, input: Partial<TopTen
   if (!current) return null;
   const title = input.title !== undefined ? String(input.title).slice(0, 200) : current.title;
   const slug = title !== current.title ? await uniqueSlug(db, slugify(title), id) : current.slug;
+  const spotifyPlaylistId = input.spotifyPlaylistId !== undefined ? input.spotifyPlaylistId : current.spotifyPlaylistId;
   const next: TopTen = {
     ...current, title, slug,
     blurb: input.blurb !== undefined ? String(input.blurb).slice(0, 600) : current.blurb,
     items: input.items !== undefined ? cleanItems(input.items) : current.items,
+    spotifyPlaylistId,
+    spotifyUrl: spotifyPlaylistId ? `https://open.spotify.com/playlist/${spotifyPlaylistId}` : undefined,
     updatedAt: Date.now(),
   };
-  await db.prepare(`UPDATE top_tens SET slug = ?, title = ?, blurb = ?, items = ?, updated_at = ? WHERE id = ?`)
-    .bind(next.slug, next.title, next.blurb, JSON.stringify(next.items), next.updatedAt, id).run();
+  await db.prepare(`UPDATE top_tens SET slug = ?, title = ?, blurb = ?, items = ?, spotify_playlist_id = ?, updated_at = ? WHERE id = ?`)
+    .bind(next.slug, next.title, next.blurb, JSON.stringify(next.items), next.spotifyPlaylistId ?? null, next.updatedAt, id).run();
   return next;
 }
 

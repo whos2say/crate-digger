@@ -79,6 +79,10 @@ export async function pausePlayer(): Promise<void> {
   try { await player?.pause(); } catch { /* not playing */ }
 }
 
+export async function resumePlayer(): Promise<void> {
+  try { await player?.resume(); } catch { /* nothing to resume */ }
+}
+
 export function onPlayerState(cb: (s: { paused: boolean; position: number; duration: number; uri?: string }) => void): void {
   player?.addListener("player_state_changed", (state) => {
     if (!state) return;

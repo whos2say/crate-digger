@@ -1,79 +1,84 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, retryDelayMs, type ArtistDetail, type Record, type Track } from "../api";
+import { api, retryDelayMs, type ArtistDetail } from "../api";
 import { useShell } from "../App";
 import CoverGrid, { Art } from "../components/CoverGrid";
 
+const compact = (n?: number) => (n === undefined ? "" : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n));
+
 export default function Artist() {
   const { id } = useParams();
-  const { addAllToPlaylist, toast } = useShell();
+  const { play, nowPlaying, canPlay, addToTopTen, addToPlaylist, addAllToPlaylist, open } = useShell();
   const [artist, setArtist] = useState<ArtistDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [keyTracks, setKeyTracks] = useState<{ title: string; record: Record; track: Track }[]>([]);
-  const [collecting, setCollecting] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    setArtist(null); setError(null); setKeyTracks([]);
+    if (attempt === 0) { setArtist(null); setError(null); }
     let timer: number | undefined;
-    api.artist(Number(id)).then(async (a) => {
-      setArtist(a);
-      // Key tracks: the openers of the first records, read from the sleeve backs (cached server-side).
-      const picks: { title: string; record: Record; track: Track }[] = [];
-      for (const r of a.records.slice(0, 6)) {
-        try {
-          const d = await api.record(r.id);
-          const t = d.tracks.find((t) => t.youtube) ?? d.tracks[0];
-          if (t) picks.push({ title: t.title, record: r, track: t });
-        } catch { /* skip */ }
-        setKeyTracks(picks.slice());
-      }
-    }).catch((e) => {
+    let live = true;
+    api.artist(id!).then((a) => live && setArtist(a)).catch((e) => {
+      if (!live) return;
       const delay = retryDelayMs(e);
-      if (delay && attempt < 3) { setError(`Discogs is busy. Trying again in ${Math.ceil(delay / 1000)}s…`); timer = window.setTimeout(() => setAttempt((n) => n + 1), delay); }
+      if (delay && attempt < 3) { setError(`Spotify is busy. Trying again in ${Math.ceil(delay / 1000)}s…`); timer = window.setTimeout(() => setAttempt((n) => n + 1), delay); }
       else setError(e.message);
     });
-    return () => { if (timer) window.clearTimeout(timer); };
+    return () => { live = false; if (timer) window.clearTimeout(timer); };
   }, [id, attempt]);
+  useEffect(() => { setAttempt(0); }, [id]);
 
-  const addAll = async () => {
-    if (!artist) return;
-    setCollecting(true);
-    const items: { record: Record; track: Track }[] = [];
-    for (const r of artist.records) {
-      try {
-        const d = await api.record(r.id);
-        for (const t of d.tracks) items.push({ record: r, track: t });
-      } catch { /* skip */ }
-    }
-    setCollecting(false);
-    if (!items.length) return toast("No tracklists found for these records");
-    addAllToPlaylist(items);
-  };
-
-  if (error) return <div className="notice error"><h3>Couldn’t load this artist</h3><p>{error}</p></div>;
+  if (error && !artist) return <div className="notice error"><h3>Couldn’t load this artist</h3><p>{error}</p></div>;
   if (!artist) return <div className="hint" style={{ paddingTop: 40 }}>Pulling their records…</div>;
 
+  const pool = artist.records;
   return (
     <>
-      <div className="artist-head">
-        {artist.image && <Art src={artist.image} alt="" />}
-        <div>
-          <h1>{artist.name}</h1>
-          {artist.profile && <p>{artist.profile}</p>}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="btn primary" onClick={addAll} disabled={collecting || !artist.records.length}>{collecting ? "Reading tracklists…" : "Add all tracks to a set"}</button>
-            <span className="saved" style={{ alignSelf: "center" }}>{artist.records.length} records with covers · via Discogs</span>
+      <section className="artist-hero">
+        {artist.image && <div className="bg" style={{ backgroundImage: `url("${artist.image}")` }} aria-hidden="true" />}
+        <div className="inner">
+          {artist.image && <Art className="portrait" src={artist.image} alt={artist.name} />}
+          <div>
+            <h1>{artist.name}</h1>
+            <div className="meta">
+              {artist.followers !== undefined && <span>{compact(artist.followers)} followers</span>}
+              <span>{artist.records.length} records</span>
+              {artist.genres.slice(0, 5).map((g) => <span key={g} className="genre">{g}</span>)}
+              <a href={artist.url} target="_blank" rel="noopener" style={{ color: "inherit" }}>open in Spotify</a>
+            </div>
           </div>
         </div>
-      </div>
-      {keyTracks.length > 0 && (
-        <div className="key-tracks">
-          <h2>Key tracks</h2>
-          <ol>{keyTracks.map((k, i) => <li key={i}><b>{k.title}</b> — {k.record.title}{k.record.year ? `, ${k.record.year}` : ""}</li>)}</ol>
-        </div>
+      </section>
+
+      {artist.topTracks.length > 0 && (
+        <section className="top-tracks">
+          <h2>Top tracks</h2>
+          <ol>
+            {artist.topTracks.map(({ track, record }, i) => {
+              const on = nowPlaying?.track.spotifyUri === track.spotifyUri;
+              return (
+                <li key={track.spotifyUri ?? i}>
+                  <span className="n">{i + 1}</span>
+                  <button style={{ padding: 0, border: 0, background: "none", cursor: "pointer" }} onClick={() => open(record, pool)} aria-label={record.title}><Art src={record.thumb} alt="" /></button>
+                  <div className="t"><strong>{track.title}</strong><span>{record.title}{record.year ? ` · ${record.year}` : ""}</span></div>
+                  <div className="acts">
+                    <button className={`play ${on ? "on" : ""}`} onClick={() => play(record, track)} title={canPlay ? "Play" : "Open in Spotify"} aria-label="Play">▶</button>
+                    <button className="add" onClick={() => addToTopTen(record, track)}>+ top ten</button>
+                    <button className="add" onClick={() => addToPlaylist(record, track)}>+ set</button>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            <button className="btn" onClick={() => addAllToPlaylist(artist.topTracks)}>Add all top tracks to a set</button>
+          </div>
+        </section>
       )}
-      <CoverGrid records={artist.records} dense />
+
+      <section className="artist-albums">
+        <h2>Records</h2>
+        {artist.records.length ? <CoverGrid records={artist.records} /> : <p className="hint">Spotify lists no albums with covers for this artist.</p>}
+      </section>
     </>
   );
 }

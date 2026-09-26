@@ -3,12 +3,14 @@
 export type Source = "discogs" | "spotify";
 
 export interface Record {
-  /** "dg:m:12345" for a Discogs master, "dg:r:12345" for a release, "sp:album:..." for Spotify. */
+  /** "sp:album:<id>" for a Spotify album; "dg:m:<id>" / "dg:r:<id>" for legacy Discogs items. */
   id: string;
   source: Source;
   title: string;
   artist: string;
-  artistId?: number;
+  /** Spotify artist id (string) or, for legacy Discogs items, a numeric Discogs id. */
+  artistId?: string | number;
+  kind?: "album" | "single" | "compilation";
   year?: number;
   label?: string;
   genres: string[];
@@ -25,6 +27,8 @@ export interface Track {
   position: string;
   title: string;
   duration?: string;
+  /** Track artist when it differs from the album artist (compilations, features). */
+  artist?: string;
   /** YouTube video id when Discogs lists one that matches the track. */
   youtube?: string;
   /** Spotify track matched to this one (filled lazily; see /api/spotify/match). */
@@ -49,19 +53,47 @@ export interface SpotifyMatch {
 
 export interface RecordDetail extends Record {
   tracks: Track[];
-  videos: { id: string; title: string }[];
-  notes?: string;
-  formats?: string[];
-  country?: string;
+  totalTracks?: number;
+  releaseDate?: string;
 }
 
-export interface ArtistDetail {
-  id: number;
+/** What Discogs knows about a release: the back of the sleeve. Fetched on demand only. */
+export interface Sleeve {
+  url: string;
+  title: string;
+  artist: string;
+  year?: number;
+  label?: string;
+  catno?: string;
+  country?: string;
+  formats?: string[];
+  genres: string[];
+  styles: string[];
+  notes?: string;
+  tracks: { position: string; title: string; duration?: string }[];
+  cover?: string;
+}
+
+export interface ArtistCard {
+  id: string;
   name: string;
-  profile?: string;
   image?: string;
+  thumb?: string;
+  genres: string[];
+  followers?: number;
+  url: string;
+}
+
+export interface ArtistDetail extends ArtistCard {
+  popularity?: number;
+  topTracks: { track: Track; record: Record }[];
   records: Record[];
-  keyTracks: { title: string; record: Record }[];
+}
+
+export interface TopTenItem {
+  record: Record;
+  /** The chosen track; absent when the album itself was added. Export uses the album's first track then. */
+  track?: Track;
 }
 
 export interface TopTen {
@@ -69,7 +101,9 @@ export interface TopTen {
   slug: string;
   title: string;
   blurb: string;
-  items: Record[]; // up to 10, ordered
+  items: TopTenItem[]; // up to 10, ordered
+  spotifyPlaylistId?: string;
+  spotifyUrl?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -98,6 +132,7 @@ export interface Crate {
 }
 
 export interface Status {
+  /** Discogs is optional now: it powers the "read the sleeve" panel only. */
   discogs: { token: boolean; cache: number };
   spotify: { configured: boolean; connected: boolean; user?: { id: string; name: string; product?: string; url?: string } };
   ownerKeySet: boolean;

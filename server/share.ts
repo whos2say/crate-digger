@@ -7,17 +7,18 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 
 export function renderShare(list: TopTen, origin: string): string {
   const url = `${origin}/s/${list.slug}`;
-  const hero = list.items[0]?.cover ? origin + list.items[0].cover : "";
-  const desc = list.blurb || list.items.map((r, i) => `${i + 1}. ${r.artist} – ${r.title}`).join("  ");
-  const tiles = list.items.map((r, i) => `
+  const abs = (u: string) => (u.startsWith("/") ? origin + u : u);
+  const hero = list.items[0]?.record.cover ? abs(list.items[0].record.cover) : "";
+  const desc = list.blurb || list.items.map(({ record: r, track: t }, i) => `${i + 1}. ${t?.artist || r.artist} – ${t ? t.title : r.title}`).join("  ");
+  const tiles = list.items.map(({ record: r, track: t }, i) => `
       <li class="tile">
-        <a href="${esc(r.url)}" target="_blank" rel="noopener">
-          <img src="${esc(r.cover)}" alt="${esc(r.artist)} – ${esc(r.title)}" loading="${i < 4 ? "eager" : "lazy"}">
+        <a href="${esc(t?.spotifyUrl || r.url)}" target="_blank" rel="noopener">
+          <img src="${esc(abs(r.cover))}" alt="${esc(r.artist)} – ${esc(r.title)}" loading="${i < 4 ? "eager" : "lazy"}" referrerpolicy="no-referrer">
         </a>
         <span class="rank" aria-hidden="true">${i + 1}</span>
         <div class="meta">
-          <strong>${esc(r.title)}</strong>
-          <span>${esc(r.artist)}${r.year ? ` <em>${r.year}</em>` : ""}${r.label ? ` <span class="lbl">${esc(r.label)}</span>` : ""}</span>
+          <strong>${esc(t ? t.title : r.title)}</strong>
+          <span>${esc(t?.artist || r.artist)}${t ? ` <em>${esc(r.title)}</em>` : r.year ? ` <em>${r.year}</em>` : ""}${!t && r.label ? ` <span class="lbl">${esc(r.label)}</span>` : ""}</span>
         </div>
       </li>`).join("");
   return `<!doctype html>
@@ -56,6 +57,7 @@ ${hero ? `<meta property="og:image" content="${esc(hero)}"><meta property="og:im
   .meta span { color:var(--dim) } .meta em { font-style:normal; margin-left:.35em } .lbl { display:block }
   footer { margin-top:40px; font-size:12px; color:var(--dim); display:flex; justify-content:space-between; gap:12px; }
   footer a { color:inherit }
+  .by .sp { display:inline-block; margin-top:8px; color:#1db954; text-decoration:none; font-weight:600 }
   @media (max-width: 780px) { ol { grid-template-columns: repeat(2, 1fr); gap:26px 18px } .rank { width:34px; height:34px; font-size:17px } }
   @media print { body { padding:0 } .tile img { box-shadow:none } }
 </style>
@@ -64,10 +66,10 @@ ${hero ? `<meta property="og:image" content="${esc(hero)}"><meta property="og:im
 <main class="sheet">
   <header>
     <div><h1>${esc(list.title)}</h1>${list.blurb ? `<p class="blurb">${esc(list.blurb)}</p>` : ""}</div>
-    <p class="by">A Top Ten by <b>DJ Brendan</b></p>
+    <p class="by">A Top Ten by <b>DJ Brendan</b>${list.spotifyUrl ? `<br><a class="sp" href="${esc(list.spotifyUrl)}" target="_blank" rel="noopener">▶ Listen on Spotify</a>` : ""}</p>
   </header>
   <ol>${tiles}</ol>
-  <footer><span>Made with Crate Digger</span><span>Covers and metadata via Discogs</span></footer>
+  <footer><span>Made with Crate Digger</span><span>Covers and metadata via Spotify${list.items.some((i) => i.record.source === "discogs") ? " and Discogs" : ""}</span></footer>
 </main>
 </body>
 </html>`;

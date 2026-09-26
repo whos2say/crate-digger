@@ -1,18 +1,25 @@
 # Crate Digger
 
-A visual-first record crate for DJ Brendan: covers first, everything else second. Dig by
-crate, genre, era, label or search; flip a cover to read the sleeve back; build ordered
-Top Tens with a public page built for screenshots; assemble working sets with a note per track.
+A visual-first record crate for DJ Brendan: covers and faces first, everything else second.
+Dig by crate, genre, era, label or search; find an artist by their photo and land on a wall of
+their records with their top tracks ready to play; build ordered Top Tens that become real
+Spotify playlists, each with a public page built for screenshots; assemble working sets with a
+note per track.
+
+**Spotify is the catalogue.** Browsing uses an app-only token, so anyone with the URL can dig.
+Playback (full tracks, Spotify Premium) and playlist export use Brendan's connected account.
+**Discogs is optional:** with a token set, any record gets a "Read the sleeve" button that pulls
+the label, catalogue number, pressing format and notes from Discogs on demand.
 
 Runs on Spacefast as one project: static Vite/React frontend, plus a Functions worker behind
-`/api/*` and `/s/*` that proxies Discogs (keys stay server-side), caches aggressively in the
-Space's database, and persists Top Tens and sets.
+`/api/*` and `/s/*` that keeps every key server-side, caches in the Space's database, and
+persists Top Tens and sets.
 
 ## Layout
 
 ```
-server/      the worker: router, Discogs client + cache, lists, share page, owner gate
-src/         React app: crate, artist wall, Top Tens, sets, record sheet
+server/      the worker: router, Spotify catalogue + auth, Discogs sleeve lookup, lists, share page, owner gate
+src/         React app: crate, artist wall, Top Tens, sets, record sheet, global player
 functions/   source-tree route shims (the published ones are generated into dist/ by the build)
 scripts/     build.mjs (Vite + esbuild → dist/), deploy.mjs (pack + publish), dev-worker.mjs (local)
 tests/       end-to-end tests of the bundled worker with SQLite and a fake Discogs
@@ -45,10 +52,11 @@ Spaces only reach a trusted host list).
 
 | Name | Purpose |
 | --- | --- |
-| `DISCOGS_TOKEN` | Free personal token (discogs.com → Settings → Developers). Discogs only opens `/database/search` to authenticated apps, so genre / era / label / search browsing needs it. Release, master and artist lookups, the starter crate, and all Top Ten and set features work without it. |
-| `OWNER_KEY` | Passphrase Brendan enters once in the app (top-right). Required for creating and editing lists. Until it is set, writes are open — fine for a first look, not for a public URL. |
-| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | From an app at developer.spotify.com. Add `<APP_ORIGIN>/api/spotify/callback` as a redirect URI on that app. |
+| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | **Required.** The catalogue, artist walls and search all read Spotify with an app token. From an app at developer.spotify.com; add `<APP_ORIGIN>/api/spotify/callback` as a redirect URI and add Brendan's Spotify account under the app's User Management (dev-mode apps only serve listed users). |
 | `APP_ORIGIN` | The public origin, e.g. `https://crate-digger.view.fast`, used for the Spotify redirect. Defaults to the request origin. |
+| `DISCOGS_TOKEN` | Optional. Turns on the "Read the sleeve" panel. Free personal token from discogs.com → Settings → Developers. |
+| `OWNER_KEY` | Passphrase Brendan enters once in the app (top-right). Required for creating and editing lists. Until it is set, writes are open — fine for a first look, not for a public URL. |
+
 
 ## Local development
 
@@ -60,19 +68,26 @@ npm test                                            # builds must exist: npm run
 
 ## How it works
 
-- Discogs calls go through `server/discogs.ts → cached()`: memory, then the `dg_cache` table
-  (7 days for records, 24 h for searches), then Discogs. A 429 or network failure serves stale
-  data instead of failing, and pauses new calls for 20 s.
-- Cover images are proxied by `/api/image?u=` with 30-day cache headers and CORS, so the edge
-  and the browser cache them and the "More covers like this" palette matching can read pixels.
-- "More covers like this" extracts a hue/saturation/lightness signature per cover in the
-  browser and ranks the current crate by distance. It is a visual match, not a musical one.
-- Track previews use the YouTube videos Discogs lists for a release, matched to track titles.
-  Spotify previews and Web Playback replace these when the connection lands.
-- Top Ten share pages (`/s/<slug>`) are rendered on the server with `og:title`, `og:description`
-  and the #1 cover as `og:image`, so iMessage, Slack and X show a real preview.
+- Catalogue reads (`server/catalog.ts`) go through one cached `get()`: memory, then the
+  `dg_cache` table (24 h), then Spotify with a client-credentials token that refreshes itself. A
+  429 serves stale data when there is any and otherwise returns `Retry-After`, which the views
+  turn into an automatic retry with a countdown.
+- Crates are Spotify searches (`genre:"deep house" year:1990-1999`); the genre and decade chips
+  combine. Text search returns artists (with photos) above the albums.
+- Covers load straight from Spotify's CDN in the browser. `/api/image` remains for canvas pixel
+  reads ("More covers like this") and as a fallback.
+- An artist page is a wall: portrait, genres, top tracks (play / + top ten / + set), then the
+  discography in release order.
+- Playback: one player for the app (`src/components/Player.tsx`). With the connected account on
+  Premium and the owner key set in the browser, ▶ plays the full track through the Web Playback
+  SDK; otherwise ▶ opens the track in Spotify.
+- Top Ten items are `{ record, track? }`. Adding from a tracklist or top-tracks picks the track;
+  adding a cover picks the album, and export uses its first track. Rows saved before this change
+  (bare records) still read fine.
+- Share pages (`/s/<slug>`) render on the server with `og:title`, `og:description`, the #1
+  cover as `og:image`, and a *Listen on Spotify* link once the list is exported.
 - Spacefast's Functions proxy drops `Set-Cookie`, so the owner key travels as an
-  `x-crate-key` header; the browser keeps it in localStorage.
+  `x-crate-key` header (or `?key=` on the one browser navigation, the Spotify connect link).
 
 ## Spotify
 
@@ -84,14 +99,14 @@ owner key is set in that browser.
   that is a browser navigation). `GET /api/spotify/login` sends you to Spotify's consent screen
   (authorization code + PKCE, with the server secret), `GET /api/spotify/callback` stores tokens
   under `spotify:tokens` and returns you to the crate. Tokens refresh themselves.
-- **Previews:** opening a record with Spotify connected matches each track
-  (`GET /api/spotify/match?title&artist&album&duration`, cached a month) and lights up its play
-  button. Free accounts get the 30-second preview; a Premium account plays the full track through
-  the Web Playback SDK. Tracks with no Spotify match fall back to the YouTube video Discogs lists.
-  Matched tracks show a green *via Spotify* tag and carry `spotifyUri` / `previewUrl`.
-- **Export:** on a set, *Export to Spotify* (`POST /api/playlists/:id/export`) creates a private
-  playlist on the connected account and writes `spotifyPlaylistId` back; re-exporting updates that
-  playlist in place. Tracks Spotify does not have are listed rather than silently dropped.
+- **Playback:** every track in the catalogue carries its `spotifyUri`, so ▶ plays it in full
+  through the Web Playback SDK when the connected account is Premium and the crate is unlocked.
+  (Spotify no longer issues 30-second preview URLs to new apps, so there is no preview lane.)
+- **Export:** *Export to Spotify* on a Top Ten (`POST /api/toptens/:id/export`) or a set
+  (`POST /api/playlists/:id/export`) creates a private playlist on the connected account and
+  writes `spotifyPlaylistId` back; re-exporting updates that playlist in place. Tracks without a
+  URI (legacy Discogs items) are matched by title and artist, and anything Spotify does not have
+  is listed rather than silently dropped.
 - **Disconnect:** `POST /api/spotify/disconnect` (owner only) forgets the account.
 
 Identity still keys off `OWNER_KEY`; tying it to the connected Spotify account would need a
