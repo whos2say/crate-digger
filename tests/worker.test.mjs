@@ -43,7 +43,7 @@ globalThis.fetch = async (url, init = {}) => {
       const q = new URL(u).searchParams.get("q");
       const types = new URL(u).searchParams.get("type");
       const out = {};
-      if (types.includes("album")) out.albums = { total: 2, items: /deep house|loose|blue moon|nu groove/i.test(q) ? [album("alb1", "Blue Moon", 1994, { label: "Nu Groove" }), album("alb1b", "Blue Moon (Remastered)", 2010), album("alb2", "No Art", 1990, { images: [] })] : [] };
+      if (types.includes("album")) out.albums = { total: 2, items: /deep house|loose|blue moon|nu groove|genre:"soul"/i.test(q) ? [album("alb1", "Blue Moon", 1994, { label: "Nu Groove" }), album("alb1b", "Blue Moon (Remastered)", 2010), album("alb2", "No Art", 1990, { images: [] })] : [] };
       if (types.includes("artist")) out.artists = { items: [{ ...artistLite, images, genres: ["deep house", "uk street soul"], followers: { total: 12345 } }, { id: "art9", name: "No Photo", images: [], genres: [] }] };
       if (types.includes("track")) out.tracks = { items: /blue moon/i.test(q) ? [track("t1", "Blue Moon - Original Mix", 1), { ...track("t9", "Blue Moon", 1, 180000), artists: [{ id: "e", name: "Elvis Presley" }] }] : [] };
       return Response.json(out);
@@ -99,6 +99,15 @@ test("catalogue: crates and search come from Spotify with an app token; artists 
   assert.equal(s.body.artists.length, 1); assert.equal(s.body.artists[0].name, "Loose Ends"); assert.equal(s.body.artists[0].thumb, IMG300);
   assert.equal(s.body.records.length, 1);
   assert.equal((await req("/api/search")).status, 400);
+  // a bare decade fans out across genres instead of sending Spotify a filter-only query
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { const u = String(url); if (u.includes("/search?")) seen.push(new URL(u).searchParams.get("q")); return realFetch(url, init); };
+  try {
+    const d = await j(await req("/api/search?decade=1960s"));
+    assert.equal(d.status, 200);
+    assert.ok(seen.length >= 5); assert.ok(seen.every((x) => /genre:"[^"]+" year:1960-1969/.test(x)));
+  } finally { globalThis.fetch = realFetch; }
   assert.equal((await req("/api/crates/nope")).status, 404);
 });
 

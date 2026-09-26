@@ -187,10 +187,27 @@ function dedupeAlbums(albums: SpAlbum[]): SpAlbum[] {
 }
 
 const PAGE = 40;
+// Spotify rejects a query that is only a year: or label: filter, so a bare decade (or label)
+// browse fans out across broad genres and merges what comes back.
+const FANOUT_GENRES = ["soul", "funk", "disco", "jazz", "house", "reggae", "hip hop", "electronic", "latin", "rock"];
+
+async function fanOut(db: D1Like | null, env: SpotifyEnv, p: SearchParams): Promise<{ records: Record[]; artists: ArtistCard[]; page: number; pages: number }> {
+  const results = await Promise.all(FANOUT_GENRES.map(async (g) => {
+    const qs = new URLSearchParams({ q: buildQuery({ ...p, genre: g }), type: "album", limit: "20", market: MARKET });
+    try { return (await get<{ albums: { items: SpAlbum[] } }>(db, env, `/search?${qs}`)).albums.items; } catch { return [] as SpAlbum[]; }
+  }));
+  // Interleave so one genre does not dominate the top of the crate.
+  const merged: SpAlbum[] = [];
+  for (let i = 0; i < 20; i++) for (const r of results) if (r[i]) merged.push(r[i]);
+  const albums = dedupeAlbums(merged);
+  if (!albums.length && results.every((r) => !r.length)) throw new SpotifyError("Spotify found nothing for that.", 404);
+  return { records: albums.slice(0, 80).map(albumToRecord), artists: [], page: 1, pages: 1 };
+}
 
 export async function search(db: D1Like | null, env: SpotifyEnv, p: SearchParams): Promise<{ records: Record[]; artists: ArtistCard[]; page: number; pages: number }> {
   const q = buildQuery(p);
   if (!q) throw new SpotifyError("Give me something to dig for.", 400);
+  if (!p.q && !p.genre) return fanOut(db, env, p);
   const page = Math.max(1, p.page ?? 1);
   const types = p.q && page === 1 ? "album,artist" : "album";
   const qs = new URLSearchParams({ q, type: types, limit: String(PAGE), offset: String((page - 1) * PAGE), market: MARKET });
